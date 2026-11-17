@@ -985,9 +985,6 @@ def _available_packages(ownership: ServiceOwnership):
 
 
 def _resolve_purchase_price(owner_admin_id, package) -> int:
-    owner = db.session.get(Admin, owner_admin_id) if owner_admin_id else None
-    if owner and str(getattr(owner, 'role', '') or '').lower() == 'reseller':
-        return int(calculate_reseller_price(owner, package=package) or 0)
     return int(package.price or 0)
 
 

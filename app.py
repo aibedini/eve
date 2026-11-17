@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.23.15"
+APP_VERSION = "2.23.16"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -4309,7 +4309,6 @@ def _telegram_purchase_packages_payload(bot: TelegramBotInstance = None):
     # Mirrors telegram_bot_worker._purchase_packages / _resolve_purchase_price;
     # app.py cannot import the worker (the worker already imports app).
     owner_id = int(bot.owner_admin_id) if bot and bot.owner_admin_id else None
-    owner = db.session.get(Admin, owner_id) if owner_id else None
     packages = Package.query.filter_by(enabled=True).order_by(
         Package.display_order.asc(), Package.id.asc(),
     ).all()
@@ -4331,8 +4330,6 @@ def _telegram_purchase_packages_payload(bot: TelegramBotInstance = None):
             ):
                 continue
         price = int(package.price or 0)
-        if owner and str(getattr(owner, 'role', '') or '').lower() == 'reseller':
-            price = int(calculate_reseller_price(owner, package=package) or 0)
         rows.append({
             'id': package.id,
             'name': package.name,

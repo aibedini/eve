@@ -185,6 +185,7 @@
                     ${ownBadge}
                     ${subBadge}
                     <div class="pkg-price">${Number(p.price).toLocaleString()} T</div>
+                    <span class="field-note">${myPkgT('Your cost', 'هزینه شما')}: ${Number(p.reseller_cost).toLocaleString()} T</span>
                     <label class="sub-toggle" title="${myPkgT('Show on customer subscription page', 'نمایش در صفحه اشتراک مشتری')}">
                         <div class="toggle-switch">
                             <input type="checkbox" ${p.sub_shown ? 'checked' : ''} data-onchange="toggleSub(${p.id}, this.checked, this)">

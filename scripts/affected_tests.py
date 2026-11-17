@@ -36,6 +36,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: path prefix -> (tier-1 modules, tier-2 extra modules). Longest prefix wins, so a more
 #: specific mapping can refine a broad one.
 MAPPING = (
+    ('alembic/versions/4fdb05815625_', (
+        ['tests.test_alembic_reseller_costs'], [],
+    )),
     ('panel/services/server_network.py', (
         ['tests.test_server_network'], [],
     )),
@@ -107,11 +110,11 @@ MAPPING = (
         ['tests.test_regression_matrix'],
     )),
     ('panel/services/billing.py', (
-        ['tests.test_reseller_management', 'tests.test_reseller_statement'],
-        ['tests.test_renew_consistency'],
+        ['tests.test_reseller_management', 'tests.test_reseller_statement', 'tests.test_package_visibility'],
+        ['tests.test_renew_consistency', 'tests.test_telegram_reseller_scoping', 'tests.test_telegram_reseller_bots'],
     )),
     ('panel/routes/packages.py', (
-        ['tests.test_reseller_management'],
+        ['tests.test_reseller_management', 'tests.test_package_visibility'],
         ['tests.test_renew_consistency'],
     )),
     ('panel/routes/finance.py', (
@@ -345,7 +348,7 @@ MAPPING = (
         # The dashboard's renewal modal and recovery contract used to be inline in
         # templates/dashboard.html, so moving the JS silently stopped this bundle from
         # being tested when it changed. Longest prefix wins over the generic static/.
-        ['tests.test_renew_ui_state', 'tests.test_renewal_evidence',
+        ['tests.test_dashboard_live', 'tests.test_renew_ui_state', 'tests.test_renewal_evidence',
          'tests.test_p0_renewal_recovery_contract', 'tests.test_dashboard_rate_limit'],
         ['tests.test_ui_design_system', 'tests.test_dashboard_live',
          'tests.test_static_caching'],

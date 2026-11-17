@@ -6000,6 +6000,12 @@ Connection links
 
     // Close dropdown when clicking outside
     document.addEventListener('click', function(event) {
+        const accountDropdown = document.getElementById('account-filter-dropdown');
+        const accountBtn = document.getElementById('account-filter-btn');
+        if (accountDropdown && accountBtn && !accountDropdown.contains(event.target) && !accountBtn.contains(event.target)) {
+            accountDropdown.classList.add('hidden');
+            accountBtn.setAttribute('aria-expanded', 'false');
+        }
         const dropdown = document.getElementById('server-filter-dropdown');
         const btn = document.getElementById('server-filter-btn');
         if (dropdown && !dropdown.classList.contains('hidden') && !dropdown.contains(event.target) && !btn.contains(event.target)) {
@@ -6048,11 +6054,36 @@ Connection links
         }
     });
 
+    function toggleAccountFilter() {
+        const dropdown = document.getElementById('account-filter-dropdown');
+        const open = dropdown.classList.contains('hidden');
+        dropdown.classList.toggle('hidden', !open);
+        document.getElementById('account-filter-btn').setAttribute('aria-expanded', String(open));
+    }
+
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !document.getElementById('account-filter-dropdown')?.classList.contains('hidden')) {
+            toggleAccountFilter();
+            document.getElementById('account-filter-btn')?.focus();
+        }
+    });
+
+    function matchesPhoneFilter(client) {
+        if (!document.getElementById('no-phone-filter')?.checked) return true;
+        return extractWhatsAppNumbers(client.email, client.comment).length === 0;
+    }
+
     function applyDisabledVisibility() {
         const container = document.getElementById('inbounds-container');
 
         const disabledOnlyEl = document.getElementById('disabled-only-filter');
         disabledOnlyClients = Boolean(disabledOnlyEl && disabledOnlyEl.checked);
+        const count = Number(disabledOnlyClients) + Number(Boolean(document.getElementById('no-phone-filter')?.checked));
+        const badge = document.getElementById('account-filter-count');
+        if (badge) {
+            badge.textContent = count;
+            badge.classList.toggle('hidden', count === 0);
+        }
 
         const hideDisabledEl = document.getElementById('hide-disabled-filter');
         hideDisabledClients = Boolean(hideDisabledEl && hideDisabledEl.checked);
@@ -6111,9 +6142,9 @@ Connection links
         }
         
         // 2. Filter clients (Expiry)
-        if (selectedExpiryFilters && selectedExpiryFilters.size > 0) {
+        if (selectedExpiryFilters.size > 0 || document.getElementById('no-phone-filter')?.checked) {
             filtered = filtered.map(inbound => {
-                let clients = inbound.clients;
+                let clients = (inbound.clients || []).filter(matchesPhoneFilter);
 
                 if (selectedExpiryFilters && selectedExpiryFilters.size > 0) {
                     clients = clients.filter(matchesExpiryFilter);
@@ -6615,6 +6646,7 @@ Connection links
         }
         
         // Filter by Expiry
+        filteredResults = filteredResults.filter(r => matchesPhoneFilter(r.client));
         if (selectedExpiryFilters && selectedExpiryFilters.size > 0) {
             filteredResults = filteredResults.filter(r => matchesExpiryFilter(r.client));
         }

@@ -2,6 +2,7 @@
 import json
 import hashlib
 import time
+import math
 from datetime import datetime
 
 from flask import Blueprint, jsonify, make_response, request, session
@@ -11,9 +12,43 @@ from panel.models import Admin, Package, PriceTier, SystemConfig
 from panel.routes.common import login_required, permission_required
 from panel.services.billing import (
     _get_applicable_price_tier, _tier_assigned_reseller_ids, calculate_reseller_price,
+    calculate_tariff_price, reseller_sub_package_ids,
 )
 
 bp = Blueprint('packages', __name__)
+
+
+def _optional_cost(value):
+    if value in (None, ''):
+        return None
+    if isinstance(value, bool):
+        raise ValueError('Cost must be a non-negative integer')
+    parsed = int(str(value))
+    if parsed < 0 or parsed > 2147483647:
+        raise ValueError('Cost must be between 0 and 2147483647')
+    return parsed
+
+
+def _package_cost_settings(data, package=None):
+    """Validate the administrator's wallet-cost policy before mutating a package."""
+    mode = data.get('reseller_cost_mode', getattr(package, 'reseller_cost_mode', None) or 'auto')
+    if mode not in ('auto', 'fixed', 'percent', 'tariff'):
+        raise ValueError('Invalid reseller cost mode')
+    raw_fixed = data.get('reseller_price', getattr(package, 'reseller_price', None))
+    fixed = _optional_cost(raw_fixed)
+    raw_percent = data.get('reseller_discount_percent', getattr(package, 'reseller_discount_percent', None))
+    percent = float(raw_percent) if raw_percent not in (None, '') else None
+    rounding = _optional_cost(data.get('reseller_rounding', getattr(package, 'reseller_rounding', 0))) or 0
+    if percent is not None and (not math.isfinite(percent) or not 0 <= percent <= 100):
+        raise ValueError('Discount must be between 0 and 100')
+    if rounding < 0 or rounding > 1000000000:
+        raise ValueError('Invalid rounding step')
+    if mode == 'fixed' and fixed is None:
+        raise ValueError('Fixed reseller cost is required')
+    if mode == 'percent' and percent is None:
+        raise ValueError('Discount percentage is required')
+    return dict(reseller_cost_mode=mode, reseller_price=fixed,
+                reseller_discount_percent=percent, reseller_rounding=rounding)
 
 
 @bp.route('/api/packages', methods=['GET'])
@@ -85,6 +120,10 @@ def get_packages():
 def create_package():
     import json as _j
     data = request.json or {}
+    try:
+        cost_settings = _package_cost_settings(data)
+    except (ValueError, TypeError, OverflowError) as exc:
+        return jsonify(success=False, error=str(exc)), 400
     reseller_ids = data.get('reseller_ids', data.get('assigned_reseller_ids', []))
     if not isinstance(reseller_ids, list):
         reseller_ids = []
@@ -93,7 +132,7 @@ def create_package():
         days=int(data.get('days', 0)),
         volume=int(data.get('volume', 0)),
         price=int(data.get('price')),
-        reseller_price=int(data.get('reseller_price')) if data.get('reseller_price') is not None else None,
+        **cost_settings,
         enabled=data.get('enabled', True),
         scope=data.get('scope', 'global'),
         assigned_reseller_ids=_j.dumps([int(r) for r in reseller_ids]),
@@ -113,6 +152,10 @@ def create_package():
 def update_package(package_id):
     package = Package.query.get_or_404(package_id)
     data = request.json or {}
+    try:
+        cost_settings = _package_cost_settings(data, package)
+    except (ValueError, TypeError, OverflowError) as exc:
+        return jsonify(success=False, error=str(exc)), 400
     if 'name' in data:
         package.name = data['name']
     if 'days' in data:
@@ -121,8 +164,8 @@ def update_package(package_id):
         package.volume = int(data['volume'])
     if 'price' in data:
         package.price = int(data['price'])
-    if 'reseller_price' in data:
-        package.reseller_price = int(data['reseller_price']) if data['reseller_price'] is not None else None
+    for field, value in cost_settings.items():
+        setattr(package, field, value)
     if 'enabled' in data:
         package.enabled = bool(data['enabled'])
     if 'scope' in data:
@@ -158,11 +201,10 @@ def delete_package(package_id):
 # is the SYSTEM base tariff; the per-use wallet cost stays the reseller's own.
 
 def _reseller_sub_shown_ids(reseller) -> set:
-    import json as _j
-    try:
-        return set(int(x) for x in _j.loads(reseller.sub_shown_package_ids or '[]'))
-    except Exception:
-        return set()
+    selected = reseller_sub_package_ids(reseller)
+    if selected is not None:
+        return selected
+    return {p.id for p in Package.query.filter_by(enabled=True, show_on_sub=True).all()}
 
 
 @bp.route('/api/my-packages', methods=['GET'])
@@ -198,7 +240,8 @@ def reseller_list_packages():
             'name': p.name,
             'days': int(p.days or 0),
             'volume': int(p.volume or 0),
-            'price': int(p.price if is_own else calculate_reseller_price(user, package=p) or 0),
+            'price': int(p.price or 0),
+            'reseller_cost': int(calculate_reseller_price(user, package=p) or 0),
             'is_own': is_own,
             'sub_shown': bool(p.show_on_sub) if is_own else (p.id in shown),
             'show_on_create': bool(getattr(p, 'show_on_create', True)),
@@ -346,7 +389,7 @@ def reseller_toggle_package_sub(package_id):
         shown.add(pkg.id)
     else:
         shown.discard(pkg.id)
-    user.sub_shown_package_ids = _j.dumps(sorted(shown))
+    user.sub_shown_package_ids = _j.dumps({'ids': sorted(shown)})
     db.session.commit()
     return jsonify({'success': True, 'sub_shown': desired})
 
@@ -373,41 +416,7 @@ def assign_package_to_resellers(package_id):
 # ── PriceTier CRUD ────────────────────────────────────────────────────────────
 
 def _calculate_minimum_price(volume_gb, days, reseller_id=None, server_id=None, user=None):
-    """Returns (price, cost_per_gb, cost_per_day, matched_tier)."""
-    volume_gb = float(volume_gb or 0)
-    days = float(days or 0)
-    tier = _get_applicable_price_tier(volume_gb, days, reseller_id=reseller_id, server_id=server_id)
-
-    if tier:
-        cpg = int(tier.cost_per_gb or 0)
-        cpd = int(tier.cost_per_day or 0)
-    else:
-        try:
-            cpg = int((db.session.get(SystemConfig, 'cost_per_gb') or SystemConfig()).value or 0)
-        except Exception:
-            cpg = 0
-        try:
-            cpd = int((db.session.get(SystemConfig, 'cost_per_day') or SystemConfig()).value or 0)
-        except Exception:
-            cpd = 0
-        if user is not None:
-            cpg = calculate_reseller_price(user, base_price=cpg, cost_type='gb')
-            cpd = calculate_reseller_price(user, base_price=cpd, cost_type='day')
-
-    if days == 0:
-        if tier:
-            cpd_unlimited = 0
-        else:
-            try:
-                cpd_unlimited = int((db.session.get(SystemConfig, 'cost_per_day_unlimited') or SystemConfig()).value or 0)
-            except Exception:
-                cpd_unlimited = 0
-            if user is not None:
-                cpd_unlimited = calculate_reseller_price(user, base_price=cpd_unlimited, cost_type='day')
-        min_price = int(volume_gb * cpg + cpd_unlimited)
-    else:
-        min_price = int(volume_gb * cpg + days * cpd)
-    return min_price, cpg, cpd, tier
+    return calculate_tariff_price(volume_gb, days, reseller_id, server_id, user)
 
 
 @bp.route('/api/packages/min-price')
@@ -490,6 +499,8 @@ def create_price_tier():
             max_days=int(data['max_days']) if data.get('max_days') not in (None, '') else None,
             cost_per_gb=int(data['cost_per_gb']) if data.get('cost_per_gb') not in (None, '') else None,
             cost_per_day=int(data['cost_per_day']) if data.get('cost_per_day') not in (None, '') else None,
+            reseller_cost_per_gb=_optional_cost(data.get('reseller_cost_per_gb')),
+            reseller_cost_per_day=_optional_cost(data.get('reseller_cost_per_day')),
             reseller_id=assigned_ids[0] if len(assigned_ids) == 1 else None,
             assigned_reseller_ids=json.dumps(assigned_ids),
             server_id=int(data['server_id']) if data.get('server_id') else None,
@@ -518,6 +529,9 @@ def update_price_tier(tier_id):
         for _field in ('min_volume_gb', 'max_volume_gb'):
             if _field in data:
                 setattr(tier, _field, float(data[_field]) if data[_field] not in (None, '') else None)
+        for _field in ('reseller_cost_per_gb', 'reseller_cost_per_day'):
+            if _field in data:
+                setattr(tier, _field, _optional_cost(data[_field]))
         for _field in ('min_days', 'max_days', 'cost_per_gb', 'cost_per_day', 'priority'):
             if _field in data:
                 setattr(tier, _field, int(data[_field]) if data[_field] not in (None, '') else None)

@@ -132,9 +132,11 @@ class ResellerManagementTests(unittest.TestCase):
         response = self.client.get('/api/packages?purpose=create')
         self.assertEqual(response.get_json()[0]['price'], 1300)
         etag = response.headers['ETag']
-        self.assertEqual(self.client.get('/api/my-packages').get_json()['items'][0]['price'], 1300)
+        item = self.client.get('/api/my-packages').get_json()['items'][0]
+        self.assertEqual(item['price'], 50000)
+        self.assertEqual(item['reseller_cost'], 1300)
         from panel.services.billing import _build_sub_page_packages
-        self.assertEqual(_build_sub_page_packages(self.reseller)[0]['price'], 1300)
+        self.assertEqual(_build_sub_page_packages(self.reseller)[0]['price'], 50000)
         self.assertEqual(calculate_reseller_price(self.other, package=package), 40000)
         tier.cost_per_gb = 200
         db.session.commit()
@@ -164,3 +166,94 @@ class ResellerManagementTests(unittest.TestCase):
         db.session.add(package)
         db.session.commit()
         self.assertEqual(calculate_reseller_price(self.reseller, package=package), 2300)
+
+    def test_package_cost_modes_keep_customer_price_independent(self):
+        from app import _telegram_purchase_packages_payload
+        from panel.models import TelegramBotInstance
+        from panel.services.billing import _build_sub_page_packages
+        from telegram_bot_worker import _resolve_purchase_price
+        package = Package(name='retail', days=30, volume=10, price=123456, show_on_sub=True)
+        db.session.add(package)
+        db.session.commit()
+        for settings, expected in [
+            ({'reseller_cost_mode': 'fixed', 'reseller_price': 0}, 0),
+            ({'reseller_cost_mode': 'fixed', 'reseller_price': 75000}, 75000),
+            ({'reseller_cost_mode': 'percent', 'reseller_discount_percent': 12.5, 'reseller_rounding': 0}, 108024),
+            ({'reseller_cost_mode': 'percent', 'reseller_discount_percent': 12.5, 'reseller_rounding': 1000}, 108000),
+        ]:
+            response = self.client.put(f'/admin/packages/{package.id}', json=settings)
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertEqual(calculate_reseller_price(self.reseller, package=package), expected)
+            self.assertEqual(_build_sub_page_packages(self.reseller)[0]['price'], 123456)
+            self.assertEqual(_resolve_purchase_price(self.reseller.id, package), 123456)
+        bot = TelegramBotInstance(owner_admin_id=self.reseller.id)
+        self.assertEqual(_telegram_purchase_packages_payload(bot)[0]['price'], 123456)
+        package.price = 125000
+        package.reseller_discount_percent = 10
+        self.assertEqual(calculate_reseller_price(self.reseller, package=package), 113000)
+
+    def test_invalid_cost_settings_leave_package_unchanged(self):
+        response = self.client.post('/admin/packages', json={
+            'name': 'fixed', 'days': 30, 'volume': 10, 'price': 100000,
+            'reseller_cost_mode': 'fixed', 'reseller_price': 40000})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        package = db.session.get(Package, response.get_json()['id'])
+        for bad in ({'reseller_price': -1}, {'reseller_price': True},
+                    {'reseller_price': 1.5}, {'reseller_cost_mode': 'unknown'},
+                    {'reseller_discount_percent': 101}, {'reseller_discount_percent': 'nan'},
+                    {'reseller_rounding': -1}, {'reseller_rounding': 0.5}):
+            response = self.client.put(f'/admin/packages/{package.id}', json={'name': 'changed', **bad})
+            self.assertEqual(int(response.headers.get('X-Eve-Status', response.status_code)), 400)
+            self.assertEqual(package.name, 'fixed')
+            self.assertEqual(package.reseller_price, 40000)
+
+    def test_reseller_tariff_components_and_range_boundaries(self):
+        from panel.routes.packages import _calculate_minimum_price
+        package = Package(name='P', days=30, volume=10, price=50000, reseller_cost_mode='tariff')
+        tier = PriceTier(name='range', min_volume_gb=10, max_volume_gb=20,
+                         reseller_id=self.reseller.id, cost_per_gb=1000, cost_per_day=100,
+                         reseller_cost_per_gb=200)
+        db.session.add_all([package, tier, SystemConfig(key='cost_per_gb', value='3000'),
+                            SystemConfig(key='cost_per_day', value='500')])
+        db.session.commit()
+        for gb, day, expected in [(200, None, 2000), (None, 20, 600), (200, 20, 2600), (0, 0, 0)]:
+            tier.reseller_cost_per_gb, tier.reseller_cost_per_day = gb, day
+            self.assertEqual(calculate_reseller_price(self.reseller, package=package), expected)
+            self.assertEqual(_calculate_minimum_price(10, 30, self.reseller.id, user=self.reseller)[0], expected)
+            self.assertEqual(_calculate_minimum_price(10, 30)[0], 45000)
+        self.assertEqual(_calculate_minimum_price(20, 30, self.reseller.id, user=self.reseller)[0], 75000)
+        self.assertEqual(_calculate_minimum_price(9, 30, self.reseller.id, user=self.reseller)[0], 42000)
+        self.reseller.custom_cost_per_gb = 250
+        self.assertEqual(_calculate_minimum_price(9, 30, self.reseller.id, user=self.reseller)[0], 2250)
+        self.reseller.custom_cost_per_gb = None
+        self.reseller.custom_cost_per_day = 25
+        self.assertEqual(_calculate_minimum_price(9, 30, self.reseller.id, user=self.reseller)[0], 750)
+
+    def test_reseller_can_hide_last_inherited_package(self):
+        from panel.services.billing import _build_sub_page_packages
+        package = Package(name='visible', days=30, volume=10, price=50000, show_on_sub=True)
+        db.session.add(package)
+        db.session.commit()
+        with self.client.session_transaction() as session:
+            session['admin_id'] = self.reseller.id
+        self.assertTrue(self.client.get('/api/my-packages').get_json()['items'][0]['sub_shown'])
+        for desired in (False, True, False):
+            response = self.client.post(f'/api/my-packages/{package.id}/sub-toggle', json={'show_on_sub': desired})
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertEqual(bool(_build_sub_page_packages(self.reseller)), desired)
+            self.assertEqual(self.client.get('/api/my-packages').get_json()['items'][0]['sub_shown'], desired)
+
+    def test_tier_api_persists_and_validates_reseller_costs(self):
+        response = self.client.post('/api/price-tiers', json={
+            'name': 'one rate', 'reseller_cost_per_day': 250,
+            'assigned_reseller_ids': [self.reseller.id]})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        tier_id = response.get_json()['id']
+        self.assertEqual(response.get_json()['tier']['reseller_cost_per_day'], 250)
+        for bad in (-1, True, 1.5, 'nan'):
+            response = self.client.put(f'/api/price-tiers/{tier_id}', json={'reseller_cost_per_day': bad})
+            self.assertEqual(int(response.headers.get('X-Eve-Status', response.status_code)), 400)
+        response = self.client.put(f'/api/price-tiers/{tier_id}', json={
+            'reseller_cost_per_day': None, 'reseller_cost_per_gb': 0})
+        self.assertEqual(response.get_json()['tier']['reseller_cost_per_gb'], 0)
+        self.assertIsNone(response.get_json()['tier']['reseller_cost_per_day'])

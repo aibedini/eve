@@ -2,6 +2,7 @@
 import json
 import logging
 from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 
 from flask import session
 from sqlalchemy import func
@@ -81,6 +82,52 @@ def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None
     return best_global
 
 
+def calculate_tariff_price(volume_gb, days, reseller_id=None, server_id=None, user=None):
+    """Return wallet cost for a reseller, or the system tariff without one."""
+    volume_gb, days = float(volume_gb or 0), float(days or 0)
+    reseller = user if user and user.role == 'reseller' else None
+    if reseller_id and (not reseller or reseller.id != reseller_id):
+        candidate = db.session.get(Admin, reseller_id)
+        reseller = candidate if candidate and candidate.role == 'reseller' else None
+    tier = _get_applicable_price_tier(volume_gb, days, reseller_id, server_id)
+    base_gb = int(get_config('cost_per_gb', 0) or 0)
+    base_day = int(get_config('cost_per_day', 0) or 0)
+    cpg = tier.cost_per_gb if tier and tier.cost_per_gb is not None else base_gb
+    cpd = tier.cost_per_day if tier and tier.cost_per_day is not None else base_day
+    explicit_cost = False
+    if reseller:
+        if tier and (tier.reseller_cost_per_gb is not None or tier.reseller_cost_per_day is not None):
+            cpg, cpd = tier.reseller_cost_per_gb or 0, tier.reseller_cost_per_day or 0
+            explicit_cost = True
+        elif tier and reseller.id in _tier_assigned_reseller_ids(tier):
+            # Existing reseller-only rules already describe wallet cost.
+            cpg, cpd = tier.cost_per_gb or 0, tier.cost_per_day or 0
+            explicit_cost = True
+        elif reseller.custom_cost_per_gb is not None or reseller.custom_cost_per_day is not None:
+            cpg, cpd = reseller.custom_cost_per_gb or 0, reseller.custom_cost_per_day or 0
+            explicit_cost = True
+        else:
+            cpg = calculate_reseller_price(reseller, base_price=cpg, cost_type='gb')
+            cpd = calculate_reseller_price(reseller, base_price=cpd, cost_type='day')
+    day_cost = days * cpd
+    if days == 0 and not tier and not explicit_cost:
+        day_cost = int(get_config('cost_per_day_unlimited', 0) or 0)
+        if reseller:
+            day_cost = calculate_reseller_price(reseller, base_price=day_cost, cost_type='day')
+    return int(volume_gb * cpg + day_cost), cpg, cpd, tier
+
+
+def reseller_sub_package_ids(reseller):
+    """None inherits publication defaults; an explicit empty selection hides all."""
+    try:
+        raw = json.loads(reseller.sub_shown_package_ids or '[]')
+        if isinstance(raw, dict):
+            return {int(value) for value in raw.get('ids', [])}
+        return {int(value) for value in raw} if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
 def calculate_reseller_price(user, base_price=None, package=None, cost_type=None, server_id=None):
     """
     Calculate price for a reseller based on their settings.
@@ -104,27 +151,30 @@ def calculate_reseller_price(user, base_price=None, package=None, cost_type=None
 
     # 2. Package Logic
     if package:
+        mode = package.reseller_cost_mode or 'auto'
+        if mode == 'fixed':
+            return int(package.reseller_price or 0)
+        if mode == 'percent':
+            amount = Decimal(package.price) * (1 - Decimal(str(package.reseller_discount_percent or 0)) / 100)
+            step = int(package.reseller_rounding or 0)
+            if step:
+                amount = (amount / step).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * step
+            return int(amount)
+        if mode == 'tariff':
+            return calculate_tariff_price(package.volume, package.days, user.id, server_id, user)[0]
         tier = _get_applicable_price_tier(package.volume, package.days, user.id, server_id)
+        if tier and (tier.reseller_cost_per_gb is not None or tier.reseller_cost_per_day is not None):
+            return int((package.volume or 0) * (tier.reseller_cost_per_gb or 0)
+                       + (package.days or 0) * (tier.reseller_cost_per_day or 0))
         if tier and user.id in _tier_assigned_reseller_ids(tier):
             return int((package.volume or 0) * (tier.cost_per_gb or 0)
                        + (package.days or 0) * (tier.cost_per_day or 0))
         if user.custom_cost_per_gb is not None or user.custom_cost_per_day is not None:
-            cpg = calculate_reseller_price(user, base_price=int(get_config('cost_per_gb', 0)), cost_type='gb')
-            cpd = calculate_reseller_price(user, base_price=int(get_config('cost_per_day', 0)), cost_type='day')
-            day_cost = (package.days or 0) * cpd
-            if not package.days:
-                day_cost = calculate_reseller_price(
-                    user, base_price=int(get_config('cost_per_day_unlimited', 0)), cost_type='day')
-            return int((package.volume or 0) * cpg + day_cost)
-        # Priority 1: Reseller Price on Package (Global Reseller Price)
-        # If a specific reseller price is set on the package, use it.
-        # However, if the user has a specific discount, maybe they want discount off the standard price?
-        # Let's assume: Reseller Price is a fixed override.
+            return int((package.volume or 0) * (user.custom_cost_per_gb or 0)
+                       + (package.days or 0) * (user.custom_cost_per_day or 0))
+        # Preserve the legacy automatic policy; explicit fixed mode also allows zero.
         if package.reseller_price is not None and package.reseller_price > 0:
-             # If user has a discount, we might want to apply it to the standard price and compare?
-             # Or just take the reseller price.
-             # Let's stick to: Reseller Price > Discounted Standard Price.
-             return package.reseller_price
+            return package.reseller_price
             
         # Priority 2: Discount on Standard Price
         discount = user.discount_percent or 0
@@ -137,9 +187,9 @@ def _build_sub_page_packages(owner, server_id=None) -> list[dict]:
     account OWNER. Only packages flagged show_on_sub are eligible.
 
     - Reseller-owned account: global + packages assigned to that reseller +
-      the reseller's own packages, each priced with the reseller's pricing.
-      An empty reseller selection inherits published packages; a non-empty
-      selection is the reseller's explicit override.
+      the reseller's own packages, each at its customer selling price.
+      Legacy empty lists inherit publication defaults. Explicit selections
+      (including none) override those defaults.
     - No reseller (system/admin-managed): only global packages, standard price.
     """
     import json as _j
@@ -151,12 +201,9 @@ def _build_sub_page_packages(owner, server_id=None) -> list[dict]:
 
     is_reseller = bool(owner and getattr(owner, 'role', None) == 'reseller')
 
-    shown_ids = set()
+    shown_ids = None
     if is_reseller:
-        try:
-            shown_ids = set(int(x) for x in _j.loads(owner.sub_shown_package_ids or '[]'))
-        except Exception:
-            shown_ids = set()
+        shown_ids = reseller_sub_package_ids(owner)
 
     out = []
     for p in pkgs:
@@ -170,8 +217,7 @@ def _build_sub_page_packages(owner, server_id=None) -> list[dict]:
                     continue
                 price = p.price
             else:
-                # Global or assigned-to-reseller package — the reseller decides
-                # per-package whether to surface it (default hidden).
+                # The reseller controls publication independently of wallet cost.
                 if scope == 'global':
                     visible = True
                 elif scope == 'assigned':
@@ -187,13 +233,13 @@ def _build_sub_page_packages(owner, server_id=None) -> list[dict]:
                 # An empty list means the reseller has not configured an
                 # override yet. Inherit packages published by the admin until
                 # the reseller explicitly selects a custom set.
-                if shown_ids:
+                if shown_ids is not None:
                     visible = p.id in shown_ids
                 else:
                     visible = bool(getattr(p, 'show_on_sub', False))
                 if not visible:
                     continue
-                price = calculate_reseller_price(owner, package=p, server_id=server_id)
+                price = p.price
         else:
             # System/admin-managed account: only global packages the admin ticked.
             if scope != 'global' or not getattr(p, 'show_on_sub', False):
@@ -663,7 +709,10 @@ def _recommendation_template_vars(server_id, sub_id: str, email: str = '', *,
 
 def get_config(key, default=0):
     conf = db.session.get(SystemConfig, key)
-    return int(conf.value) if conf else default
+    try:
+        return int(conf.value) if conf else default
+    except (TypeError, ValueError):
+        return default
 
 def log_transaction(user_id, amount, type, desc, server_id=None, card_id=None, sender_card=None, category='usage', client_email=None, package_name=None, volume_gb=None, days=None):
     trans = Transaction(

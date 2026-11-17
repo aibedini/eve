@@ -153,10 +153,9 @@ class ResellerScopingTests(unittest.TestCase):
         self.assertIn(assigned_pkg.id, visible)
         self.assertIn(personal_pkg.id, visible)
         self.assertNotIn(hidden_pkg.id, visible)
-        # reseller_price override beats the discount
-        self.assertEqual(_resolve_purchase_price(reseller.id, global_pkg), 80_000)
-        # discount applies when no reseller_price is set
-        self.assertEqual(_resolve_purchase_price(reseller.id, assigned_pkg), 90_000)
+        # Customer quotes use selling price, independently of reseller wallet cost.
+        self.assertEqual(_resolve_purchase_price(reseller.id, global_pkg), 100_000)
+        self.assertEqual(_resolve_purchase_price(reseller.id, assigned_pkg), 100_000)
         # system bot: base price, global-only visibility
         system_bot = self._bot(suffix='pkg-system')
         self.assertEqual(_resolve_purchase_price(None, global_pkg), 100_000)

@@ -270,8 +270,8 @@ class ResellerBotTests(unittest.TestCase):
         visible = {pkg.id for pkg in _purchase_packages(central, owner_id=owner_id)}
         self.assertEqual(visible, {global_pkg.id, assigned_pkg.id})
         self.assertEqual(_purchase_card(central, owner_id=owner_id).id, owned_card.id)
-        self.assertEqual(_resolve_purchase_price(owner_id, global_pkg), 80_000)
-        self.assertEqual(_resolve_purchase_price(owner_id, assigned_pkg), 90_000)
+        self.assertEqual(_resolve_purchase_price(owner_id, global_pkg), 100_000)
+        self.assertEqual(_resolve_purchase_price(owner_id, assigned_pkg), 100_000)
 
         # Without reseller ownership the central bot keeps global behavior.
         self.assertIsNone(_effective_owner_id(central, 8_200_003))

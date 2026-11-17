@@ -302,11 +302,25 @@
                 <span class="toggle-text">{{ _('Hide Disabled') }}</span>
             </label>
 
-            <label class="filter-toggle" title="{{ _('Show Disabled Clients Only') }}">
-                <input type="checkbox" id="disabled-only-filter" data-onchange="applyDisabledVisibility()">
-                <span class="toggle-track"></span>
-                <span class="toggle-text">{{ _('Disabled only') }}</span>
-            </label>
+            <div class="filter-dropdown-wrapper">
+                <button type="button" class="filter-btn" id="account-filter-btn" aria-expanded="false" aria-controls="account-filter-dropdown" data-onclick="toggleAccountFilter()">
+                    <span>{{ _('Accounts') }}</span>
+                    <span class="badge-count hidden" id="account-filter-count">0</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="chevron-icon"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                <div id="account-filter-dropdown" class="filter-dropdown hidden">
+                    <div class="filter-list">
+                        <div class="filter-item"><label class="checkbox-label" title="{{ _('Show Disabled Clients Only') }}">
+                            <input type="checkbox" id="disabled-only-filter" data-onchange="applyFilters()">
+                            <span class="checkmark"></span><span>{{ _('Disabled only') }}</span>
+                        </label></div>
+                        <div class="filter-item"><label class="checkbox-label" title="{{ _('No valid phone number found.') }}">
+                            <input type="checkbox" id="no-phone-filter" data-onchange="applyFilters()">
+                            <span class="checkmark"></span><span>{{ _('No Phone') }}</span>
+                        </label></div>
+                    </div>
+                </div>
+            </div>
 
             <button class="btn btn-secondary" style="padding: 8px 12px;" data-onclick="selectAllVisibleClients()">{{ _('Select All') }}</button>
         </div>

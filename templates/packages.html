@@ -153,11 +153,36 @@
                 </div>
             </div>
             <div class="form-group">
-                <label>Price (Toman)</label>
+                <label>{{ 'قیمت فروش مشتری (تومان)' if panel_lang == 'fa' else 'Customer selling price (Toman)' }}</label>
                 <input type="text" id="pkg-price" class="form-input" placeholder="100,000" data-oninput="formatNumberInput(this); checkPriceWarning()">
                 <div id="pkg-price-hint" style="margin-top:6px; font-size:0.82rem; color:var(--text-secondary); display:none;"></div>
                 <div id="pkg-price-warn" class="alert alert-warning" style="margin-top:6px; display:none; padding:8px 12px; font-size:0.84rem;">
                     {{ '⚠️ ضرر می‌کنید! قیمت پایین‌تر از حداقل هزینه محاسبه‌شده است.' if panel_lang == 'fa' else '⚠️ This price is below the calculated minimum cost.' }}
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="pkg-cost-mode">{{ 'محاسبه هزینه رسلر' if panel_lang == 'fa' else 'Reseller cost calculation' }}</label>
+                <select id="pkg-cost-mode" class="form-select" data-onchange="toggleCostFields()">
+                    <option value="auto">{{ 'خودکار / تنظیمات فعلی' if panel_lang == 'fa' else 'Automatic / existing settings' }}</option>
+                    <option value="fixed">{{ 'مبلغ ثابت' if panel_lang == 'fa' else 'Fixed amount' }}</option>
+                    <option value="percent">{{ 'تخفیف از قیمت فروش' if panel_lang == 'fa' else 'Discount from selling price' }}</option>
+                    <option value="tariff">{{ 'تعرفه گیگ / روز' if panel_lang == 'fa' else 'GB / day tariff' }}</option>
+                </select>
+                <small class="field-note">{{ 'این هزینه از اعتبار رسلر کسر می‌شود؛ مشتری قیمت فروش را می‌بیند.' if panel_lang == 'fa' else 'This cost is charged to the reseller wallet. Customers see the selling price.' }}</small>
+            </div>
+            <div id="pkg-fixed-cost-field" class="form-group hidden">
+                <label for="pkg-reseller-cost">{{ 'هزینه ثابت رسلر (تومان)' if panel_lang == 'fa' else 'Fixed reseller cost (Toman)' }}</label>
+                <input id="pkg-reseller-cost" type="text" class="form-input" inputmode="numeric" data-oninput="formatNumberInput(this)">
+            </div>
+            <div id="pkg-percent-cost-fields" class="hidden">
+                <div class="form-group">
+                    <label for="pkg-discount">{{ 'درصد تخفیف رسلر' if panel_lang == 'fa' else 'Reseller discount (%)' }}</label>
+                    <input id="pkg-discount" type="number" class="form-input" min="0" max="100" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label for="pkg-rounding">{{ 'گام رُندکردن (تومان)' if panel_lang == 'fa' else 'Rounding step (Toman)' }}</label>
+                    <input id="pkg-rounding" type="number" class="form-input" min="0" max="1000000000" step="1" value="0">
+                    <small class="field-note">{{ 'صفر: بدون رُندکردن. مثلاً ۱۰۰۰: نزدیک‌ترین هزار تومان؛ نیمه رو به بالا.' if panel_lang == 'fa' else '0 disables rounding. Example: 1000 rounds to the nearest 1,000 Toman, with halves rounded up.' }}</small>
                 </div>
             </div>
             <div class="form-group">
@@ -240,13 +265,22 @@
             <p style="font-size:0.82rem; color:var(--text-secondary); margin:4px 0 12px;">Rate overrides (leave blank = use base tariff)</p>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
-                    <label>Cost per GB (Toman)</label>
+                    <label>{{ 'تعرفه پایه هر گیگ (تومان)' if panel_lang == 'fa' else 'Base price per GB (Toman)' }}</label>
                     <input type="text" id="tier-cpg" class="form-input" placeholder="inherit" data-oninput="formatNumberInput(this)">
                 </div>
                 <div class="form-group">
-                    <label>Cost per Day (Toman)</label>
+                    <label>{{ 'تعرفه پایه هر روز (تومان)' if panel_lang == 'fa' else 'Base price per Day (Toman)' }}</label>
                     <input type="text" id="tier-cpd" class="form-input" placeholder="inherit" data-oninput="formatNumberInput(this)">
                 </div>
+            </div>
+            <div class="form-group">
+                <label for="tier-reseller-cpg">{{ 'هزینه رسلر / گیگ (تومان)' if panel_lang == 'fa' else 'Reseller Cost/GB (Toman)' }}</label>
+                <input type="text" id="tier-reseller-cpg" class="form-input" inputmode="numeric" data-oninput="formatNumberInput(this)">
+            </div>
+            <div class="form-group">
+                <label for="tier-reseller-cpd">{{ 'هزینه رسلر / روز (تومان)' if panel_lang == 'fa' else 'Reseller Cost/Day (Toman)' }}</label>
+                <input type="text" id="tier-reseller-cpd" class="form-input" inputmode="numeric" data-oninput="formatNumberInput(this)">
+                <small class="field-note">{{ 'هر دو خالی: تنظیمات فعلی. اگر یکی پر باشد، فقط همان محاسبه می‌شود؛ اگر هر دو پر باشند، جمع می‌شوند. حد بالای بازه شامل نمی‌شود.' if panel_lang == 'fa' else 'Both blank: existing settings. Fill one to charge only that rate, or both to add them. Range upper bounds are exclusive.' }}</small>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
@@ -601,6 +635,11 @@ function openPkgModal(pkg) {
     document.getElementById('pkg-days').value  = pkg ? Number(pkg.days).toLocaleString()   : '';
     document.getElementById('pkg-vol').value   = pkg ? Number(pkg.volume).toLocaleString() : '';
     document.getElementById('pkg-price').value = pkg ? Number(pkg.price).toLocaleString() : '';
+    document.getElementById('pkg-cost-mode').value = pkg?.reseller_cost_mode || 'auto';
+    document.getElementById('pkg-reseller-cost').value = pkg?.reseller_price != null ? Number(pkg.reseller_price).toLocaleString() : '';
+    document.getElementById('pkg-discount').value = pkg?.reseller_discount_percent ?? '';
+    document.getElementById('pkg-rounding').value = pkg?.reseller_rounding || 0;
+    toggleCostFields();
     document.getElementById('pkg-scope').value = pkg ? (pkg.scope || 'global') : 'global';
     document.getElementById('pkg-show-on-sub').checked = pkg ? !!pkg.show_on_sub : false;
     document.getElementById('pkg-show-on-create').checked = pkg ? (pkg.show_on_create !== false) : true;
@@ -620,6 +659,12 @@ function closePkgModal() {
     document.getElementById('pkg-modal').classList.add('hidden');
     document.getElementById('pkg-price-hint').style.display = 'none';
     document.getElementById('pkg-price-warn').style.display = 'none';
+}
+
+function toggleCostFields() {
+    const mode = document.getElementById('pkg-cost-mode').value;
+    document.getElementById('pkg-fixed-cost-field').classList.toggle('hidden', mode !== 'fixed');
+    document.getElementById('pkg-percent-cost-fields').classList.toggle('hidden', mode !== 'percent');
 }
 
 function startEditPackage(id) {
@@ -712,6 +757,10 @@ async function submitPackage() {
         days,
         volume: vol,
         price,
+        reseller_cost_mode: document.getElementById('pkg-cost-mode').value,
+        reseller_price: document.getElementById('pkg-reseller-cost').value.trim() !== '' ? unformatNumber(document.getElementById('pkg-reseller-cost').value) : null,
+        reseller_discount_percent: document.getElementById('pkg-discount').value !== '' ? Number(document.getElementById('pkg-discount').value) : null,
+        reseller_rounding: Number(document.getElementById('pkg-rounding').value || 0),
         scope,
         reseller_ids,
         assigned_reseller_ids: reseller_ids,
@@ -880,8 +929,10 @@ function renderTiers(body) {
                 <th>Name</th>
                 <th>Volume</th>
                 <th>Days</th>
-                <th>Cost/GB</th>
-                <th>Cost/Day</th>
+                <th>${pkgT('Base/GB', 'پایه/گیگ')}</th>
+                <th>${pkgT('Base/Day', 'پایه/روز')}</th>
+                <th>${pkgT('Reseller Cost/GB', 'هزینه رسلر/گیگ')}</th>
+                <th>${pkgT('Reseller Cost/Day', 'هزینه رسلر/روز')}</th>
                 <th>Reseller</th>
                 <th>Priority</th>
                 <th></th>
@@ -895,6 +946,8 @@ function renderTiers(body) {
                 <td>${fmtRange(t.min_days, t.max_days, 'd')}</td>
                 <td>${t.cost_per_gb != null ? Number(t.cost_per_gb).toLocaleString() : '—'}</td>
                 <td>${t.cost_per_day != null ? Number(t.cost_per_day).toLocaleString() : '—'}</td>
+                <td>${t.reseller_cost_per_gb != null ? Number(t.reseller_cost_per_gb).toLocaleString() : '—'}</td>
+                <td>${t.reseller_cost_per_day != null ? Number(t.reseller_cost_per_day).toLocaleString() : '—'}</td>
                 <td>${escHtml(tierResellerNames(t))}</td>
                 <td>${t.priority}</td>
                 <td style="white-space:nowrap;">
@@ -922,6 +975,8 @@ function openTierModal(tier) {
     document.getElementById('tier-max-days').value  = tier && tier.max_days != null ? Number(tier.max_days).toLocaleString() : '';
     document.getElementById('tier-cpg').value       = tier && tier.cost_per_gb != null ? Number(tier.cost_per_gb).toLocaleString() : '';
     document.getElementById('tier-cpd').value       = tier && tier.cost_per_day != null ? Number(tier.cost_per_day).toLocaleString() : '';
+    document.getElementById('tier-reseller-cpg').value = tier?.reseller_cost_per_gb != null ? Number(tier.reseller_cost_per_gb).toLocaleString() : '';
+    document.getElementById('tier-reseller-cpd').value = tier?.reseller_cost_per_day != null ? Number(tier.reseller_cost_per_day).toLocaleString() : '';
     document.getElementById('tier-priority').value  = tier ? tier.priority : 0;
     document.getElementById('tier-active').checked  = tier ? tier.is_active : true;
 
@@ -960,6 +1015,8 @@ async function submitTier() {
         max_days:      document.getElementById('tier-max-days').value !== '' ? parseInt(document.getElementById('tier-max-days').value.replace(/,/g, '')) : null,
         cost_per_gb:   document.getElementById('tier-cpg').value !== '' ? unformatNumber(document.getElementById('tier-cpg').value) : null,
         cost_per_day:  document.getElementById('tier-cpd').value !== '' ? unformatNumber(document.getElementById('tier-cpd').value) : null,
+        reseller_cost_per_gb: document.getElementById('tier-reseller-cpg').value !== '' ? unformatNumber(document.getElementById('tier-reseller-cpg').value) : null,
+        reseller_cost_per_day: document.getElementById('tier-reseller-cpd').value !== '' ? unformatNumber(document.getElementById('tier-reseller-cpd').value) : null,
         assigned_reseller_ids: Array.from(document.getElementById('tier-reseller').selectedOptions || []).map(opt => parseInt(opt.value)),
         priority:      parseInt(document.getElementById('tier-priority').value) || 0,
         is_active:     document.getElementById('tier-active').checked,

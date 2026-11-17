@@ -323,6 +323,9 @@ class Package(db.Model):
     volume = db.Column(db.Integer, nullable=False)
     price = db.Column(db.Integer, nullable=False)
     reseller_price = db.Column(db.Integer, nullable=True)
+    reseller_cost_mode = db.Column(db.String(16), nullable=False, default='auto', server_default='auto')
+    reseller_discount_percent = db.Column(db.Float, nullable=True)
+    reseller_rounding = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     enabled = db.Column(db.Boolean, default=True)
     # Extended columns (added via ALTER TABLE migration for existing DBs)
     scope = db.Column(db.String(20), default='global')        # global | assigned | personal
@@ -349,6 +352,9 @@ class Package(db.Model):
             'volume': self.volume,
             'price': self.price,
             'reseller_price': self.reseller_price,
+            'reseller_cost_mode': self.reseller_cost_mode or 'auto',
+            'reseller_discount_percent': self.reseller_discount_percent,
+            'reseller_rounding': self.reseller_rounding or 0,
             'enabled': self.enabled,
             'scope': self.scope or 'global',
             'assigned_reseller_ids': assigned,
@@ -376,6 +382,8 @@ class PriceTier(db.Model):
     # Rate overrides (None = fall through to system default)
     cost_per_gb = db.Column(db.Integer, nullable=True)
     cost_per_day = db.Column(db.Integer, nullable=True)
+    reseller_cost_per_gb = db.Column(db.Integer, nullable=True)
+    reseller_cost_per_day = db.Column(db.Integer, nullable=True)
     # Scope: None = global; reseller_id is legacy single-reseller scope.
     # assigned_reseller_ids stores a JSON list for multi-reseller rules.
     reseller_id = db.Column(db.Integer, nullable=True, index=True)
@@ -402,6 +410,8 @@ class PriceTier(db.Model):
             'max_days': self.max_days,
             'cost_per_gb': self.cost_per_gb,
             'cost_per_day': self.cost_per_day,
+            'reseller_cost_per_gb': self.reseller_cost_per_gb,
+            'reseller_cost_per_day': self.reseller_cost_per_day,
             'reseller_id': self.reseller_id,
             'assigned_reseller_ids': assigned,
             'server_id': self.server_id,

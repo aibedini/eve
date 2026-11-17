@@ -87,6 +87,43 @@ const payload = (revision, inbounds, mode = 'full', removed = []) => ({ success:
     sync: { revision, mode, since: revision - 1 }, inbounds, removed, servers: [], stats: {} });
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 
+test('No Phone intersects server and expiry filters and accepts phones in either source', () => {
+    const f = fixture();
+    const phone = { checked: true };
+    const originalGet = f.sandbox.document.getElementById;
+    f.sandbox.document.getElementById = id => id === 'no-phone-filter' ? phone : originalGet(id);
+    const client = (email, comment = '', expiryType = 'expired') => ({email, comment, expiryType});
+    const missing = client('alice', 'call later');
+    const invalid = client('bob', '12345');
+    const inputs = [inbound(1, 1, 'one', [missing, invalid,
+        client('email_09121234567'), client('comment', '+49 176 12345678'),
+        client('persian', '۰۹۱۲۱۲۳۴۵۶۷'), client('not-expired', '', 'unlimited')]),
+        inbound(2, 2, 'two', [client('another')])];
+    assert.equal(f.sandbox.filterInbounds(inputs).flatMap(i => i.clients).length, 4);
+    vm.runInContext("selectedServerIds.add(1); selectedExpiryFilters.add('expired');", f.sandbox);
+    const result = f.sandbox.filterInbounds(inputs);
+    assert.equal(result.length, 1);
+    assert.deepEqual(Array.from(result[0].clients, c => c.email), ['alice', 'bob']);
+    assert.equal(inputs[0].clients.length, 6, 'the source snapshot is not mutated');
+    const controls = {
+        'no-phone-filter': phone,
+        'global-search-input': {value:'client'},
+        'search-results': {style:{}},
+        'search-results-text': {},
+        'clear-search-btn': {classList:{remove:()=>{}}},
+        'search-select-all-btn': {style:{}},
+    };
+    f.sandbox.document.getElementById = id => controls[id] || originalGet(id);
+    let searchRows;
+    f.sandbox.updateInboundsFiltered = rows => { searchRows = rows; };
+    f.sandbox.applyDisabledVisibility = () => {};
+    const results = inputs.flatMap(i => i.clients.map(c => ({server_id:i.server_id,client:c})));
+    f.sandbox.displaySearchResults(results, 'client');
+    assert.deepEqual(Array.from(searchRows, r => r.client.email), ['alice','bob']);
+    phone.checked = false;
+    assert.equal(f.sandbox.filterInbounds(inputs)[0].clients.length, 5);
+});
+
 test('dashboard defaults to live sync and starts cache-only synchronization', () => {
     const f = fixture();
     assert.match(f.template, /id="auto-refresh-toggle" checked/);
