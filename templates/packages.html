@@ -316,7 +316,7 @@
                 <select id="pkg-scope" class="form-input" data-onchange="toggleScopeFields()">
                     <option value="global">Global — all resellers</option>
                     <option value="assigned">Assigned — specific resellers</option>
-                    <option value="personal">Personal — creator only</option>
+                    <option value="personal">{{ 'خصوصی · حساب‌های سیستم یا رسلر سازنده' if panel_lang == 'fa' else 'Personal · System or creator’s reseller accounts' }}</option>
                 </select>
             </div>
             <div id="pkg-assigned-section" style="display:none;" class="form-group">
@@ -361,7 +361,7 @@
                     </div>
                     {% endfor %}
                 </div>
-                <p class="field-note">{{ 'این دسترسی فقط برای عملیات روی حساب همان رسلر است. انتشار برای مشتری جداگانه تنظیم می‌شود.' if panel_lang == 'fa' else 'These permissions apply to the selected reseller’s accounts. Customer publication is separate.' }}</p>
+                <p class="field-note">{{ 'پکیج خصوصی ساخته‌شده توسط ادمین برای عملیات روی حساب‌های سیستم است. پکیج رسلر به حساب‌های رسلر مربوط محدود است. انتشار برای مشتری جداگانه تنظیم می‌شود.' if panel_lang == 'fa' else 'Personal packages created by staff apply to system accounts. Reseller packages apply to the relevant reseller’s accounts. Customer publication is separate.' }}</p>
             </fieldset>
             <div class="form-actions">
                 <button class="btn btn-secondary" type="button" data-onclick="closePkgModal()">Cancel</button>

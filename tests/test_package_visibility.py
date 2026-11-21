@@ -10,8 +10,8 @@ os.environ['DATABASE_URL'] = f"sqlite:///{_DB_FILE.name.replace(os.sep, '/')}"
 os.environ['FLASK_ENV'] = 'development'
 os.environ['DISABLE_BACKGROUND_THREADS'] = '1'
 
-from app import Admin, Package, app, db  # noqa: E402
-from panel.services.billing import _build_sub_page_packages  # noqa: E402
+from app import Admin, ClientOwnership, Package, Server, app, db  # noqa: E402
+from panel.services.billing import _build_sub_page_packages, package_allowed_in_panel  # noqa: E402
 from telegram_bot_worker import _available_packages, _purchase_packages  # noqa: E402
 
 
@@ -133,6 +133,45 @@ class PackageVisibilityTests(unittest.TestCase):
         package = db.session.get(Package, resp.get_json()['id'])
         self.assertTrue(package.show_on_create)
         self.assertTrue(package.show_on_renew)
+
+    def test_staff_personal_package_shows_only_for_system_accounts_and_allowed_actions(self):
+        superadmin = Admin.query.filter_by(username='vis-test-admin').one()
+        staff = Admin(username='vis-test-staff', role='admin', enabled=True)
+        reseller = Admin(username='vis-test-shop', role='reseller', enabled=True)
+        server = Server(name='Test', host='https://test.invalid', username='test', password='test')
+        for user in (staff, reseller):
+            user.set_password('StrongVisibilityPassword123!')
+        db.session.add_all([staff, reseller, server])
+        db.session.flush()
+        ownership = ClientOwnership(reseller_id=reseller.id, server_id=server.id, inbound_id=1,
+                                    client_email='shop-client', client_uuid='shop-uuid')
+        db.session.add(ownership)
+        system = self._package('system-package', scope='personal', created_by=superadmin.id,
+                               panel_roles={'create': ['superadmin'], 'renew': ['admin', 'superadmin']})
+        private = self._package('shop-package', scope='personal', created_by=reseller.id,
+                                panel_roles={'renew': ['admin']})
+        db.session.commit()
+
+        def names(key, **params):
+            response = self.client.get('/api/packages', query_string={'purpose': key, **params})
+            return {package['name'] for package in response.get_json()}
+
+        self.assertEqual(names('renew', server_id=server.id, inbound_id=1, email='system-client'),
+                         {'system-package'})
+        self.assertEqual(names('renew', server_id=server.id, inbound_id=1, email='shop-client'), set())
+        self.assertEqual(names('create'), {'system-package'})
+        self.assertFalse(package_allowed_in_panel(system, reseller, None, 'renew'))
+        self.assertTrue(package_allowed_in_panel(private, staff, reseller.id, 'renew'))
+        self.assertFalse(package_allowed_in_panel(private, staff, None, 'renew'))
+        with self.client.session_transaction() as session_data:
+            session_data['admin_id'] = staff.id
+            session_data['role'] = staff.role
+        self.assertEqual(names('renew', server_id=server.id, inbound_id=1, email='system-client'),
+                         {'system-package'})
+        self.assertEqual(names('create'), set())
+        db.session.delete(ownership)
+        db.session.delete(server)
+        db.session.commit()
 
     # ── telegram bot listing logic ───────────────────────────────────────
 

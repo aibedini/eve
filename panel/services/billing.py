@@ -198,18 +198,24 @@ def package_in_catalog(package, reseller_id):
 
 
 def package_allowed_in_panel(package, actor, reseller_id, action):
-    if not package.enabled or not package_in_catalog(package, reseller_id):
+    if not package.enabled or not getattr(package, 'show_on_' + action, True):
         return False
-    if not getattr(package, 'show_on_' + action, True):
-        return False
-    if (package.scope or 'global') == 'global':
+    scope = package.scope or 'global'
+    if scope == 'global':
         return True
     role = 'superadmin' if actor.is_superadmin else actor.role
     if role == 'support':
         role = 'reseller' if reseller_id else 'admin'
     if package.panel_roles is None:
-        return package.scope == 'assigned' and role == 'reseller'
-    return role in package.panel_roles.get(action, [])
+        return scope == 'assigned' and role == 'reseller' and package_in_catalog(package, reseller_id)
+    if role not in package.panel_roles.get(action, []):
+        return False
+    if package_in_catalog(package, reseller_id):
+        return True
+    if scope != 'personal' or reseller_id is not None or role not in ('admin', 'superadmin'):
+        return False
+    creator = db.session.get(Admin, package.created_by) if package.created_by else None
+    return bool(creator and creator.role in ('admin', 'superadmin'))
 
 
 def catalog_offer(package, reseller_id):
