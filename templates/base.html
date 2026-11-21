@@ -26,7 +26,7 @@
     <script src="{{ url_for('static', filename='flag-data.js') }}"></script>
     <script src="{{ url_for('static', filename='name-flags.js') }}"
             data-flag-base="{{ url_for('static', filename='flags/4x3/') }}"></script>
-    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='panel-search.js') }}" defer></script>
+    {% if role != 'support' %}<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='panel-search.js') }}" defer></script>{% endif %}
     <script nonce="{{ csp_nonce }}">
         function formatNumberInput(input) {
             let value = input.value.replace(/,/g, '').replace(/\D/g, '');
@@ -357,6 +357,10 @@
             </div>
             
             <nav class="sidebar-nav">
+                {% if role == 'support' %}
+                <a href="{{ url_for('support.workspace') }}" class="nav-item {% if request.endpoint == 'support.workspace' %}active{% endif %}">{{ 'میز کار' if panel_lang == 'fa' else 'Workspace' }}</a>
+                <a href="{{ url_for('support.earnings') }}" class="nav-item {% if request.endpoint == 'support.earnings' %}active{% endif %}">{{ 'دریافتی من' if panel_lang == 'fa' else 'My earnings' }}</a>
+                {% else %}
                 <a href="{{ url_for('pages.dashboard') }}" class="nav-item {% if request.endpoint == 'pages.dashboard' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="3" y="3" width="7" height="7"></rect>
@@ -509,6 +513,10 @@
                     <span>{{ nav_t['traffic'] }}</span>
                 </a>
                 {% endif %}
+                {% if is_superadmin or support_team_available %}
+                <a href="{{ url_for('support.team') }}" class="nav-item {% if request.endpoint == 'support.team' %}active{% endif %}">{{ 'تیم پشتیبانی' if panel_lang == 'fa' else 'Support team' }}</a>
+                {% endif %}
+                {% endif %}
             </nav>
             
             <div class="sidebar-footer">
@@ -547,6 +555,7 @@
                 </button>
                 <h1 class="page-title">{% block page_title %}{{ _('Financial Overview') }}{% endblock %}</h1>
                 <div class="header-actions">
+                    {% if role != 'support' %}
                     <button type="button" class="btn btn-secondary renew-activity-trigger" id="renew-activity-trigger" aria-haspopup="dialog" aria-controls="renew-activity-modal" aria-label="{{ 'عملیات اخیر تمدید' if panel_lang == 'fa' else 'Recent renewal operations' }}">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 5h12M9 12h12M9 19h12M3 5h.01M3 12h.01M3 19h.01" stroke-linecap="round"/></svg>
                         <span class="renew-activity-trigger-label">{{ 'عملیات' if panel_lang == 'fa' else 'Activity' }}</span><span id="renew-activity-count" class="badge hidden"></span>
@@ -564,10 +573,12 @@
                         <span class="wallet-amount">{{ "{:,}".format(wallet_credit or 0) }}</span>
                         <span class="wallet-currency">T</span>
                     </div>
+                    {% endif %}
                     {% block header_actions %}{% endblock %}
                 </div>
             </header>
 
+            {% if role != 'support' %}
             <div class="panel-search-overlay hidden" id="panel-search-overlay" role="presentation">
                 <div class="panel-search-dialog" role="dialog" aria-modal="true" aria-labelledby="panel-search-title">
                     <div class="panel-search-head">
@@ -579,6 +590,7 @@
                 </div>
             </div>
 
+            {% endif %}
             {% if maintenance_notice %}
             <div role="status" style="margin: 14px 20px 0; padding: 12px 16px; border: 1px solid rgba(245, 158, 11, .45); border-radius: 10px; background: rgba(245, 158, 11, .12); color: var(--text-primary);">
                 {% if panel_lang == 'fa' %}
@@ -669,6 +681,7 @@
             pillValue.textContent = normalized.toLocaleString();
         }
 
+        {% if role != 'support' %}
         // Check for updates
         document.addEventListener('DOMContentLoaded', () => {
             fetch('/api/check-update')
@@ -685,8 +698,9 @@
                 })
                 .catch(err => console.error('Update check failed', err));
         });
+        {% endif %}
     </script>
-    {% include 'components/renew_progress.html' %}
+    {% if role != 'support' %}{% include 'components/renew_progress.html' %}{% endif %}
     {% block scripts %}{% endblock %}
 </body>
 </html>

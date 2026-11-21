@@ -26,6 +26,7 @@ PERMISSIONS = frozenset({
 # (everything except the superadmin-only secrets / backup-restore / admin-manage
 # actions); reseller is limited to its own servers, clients and finance.
 ROLE_DEFAULTS = {
+    'support': frozenset({'clients.write'}),
     'superadmin': PERMISSIONS,
     'admin': frozenset({
         'servers.read', 'servers.write',

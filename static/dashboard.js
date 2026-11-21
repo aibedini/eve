@@ -596,6 +596,8 @@
     let currentClientRemainingVolume = '';
     let addCustomPriceRequestSeq = 0;
     let renewCustomPriceRequestSeq = 0;
+    let addCustomQuote = null;
+    let renewCustomQuote = null;
     const BASE_COST_DAY = EVE_DASHBOARD.BASE_COST_DAY;
     const BASE_COST_GB = EVE_DASHBOARD.BASE_COST_GB;
     const BASE_COST_DAY_UNLIMITED = EVE_DASHBOARD.BASE_COST_DAY_UNLIMITED;
@@ -4361,6 +4363,7 @@
 
         if (usePackage) {
             payload.package_id = selectedRenewPackageId;
+            payload.quote_revision = getPackageCard('#renew-packages-list', selectedRenewPackageId)?.dataset.quoteRevision;
         } else {
             const customDays = parseFloat(document.getElementById('renew-custom-days').value) || 0;
             const rawVol = (document.getElementById('renew-custom-volume').value || '').trim();
@@ -4371,6 +4374,12 @@
             if (customVolume !== null) {
                 payload.volume = customVolume;
             }
+            payload.quote_revision = renewCustomQuote?.quote_revision;
+        }
+        if (!payload.free && !payload.quote_revision) {
+            if (usePackage) loadRenewPackages({force: true});
+            else calculateRenewCustomPrice();
+            return showToast(_t('Review the updated price before confirming.'), 'error');
         }
 
         const btn = document.querySelector('#renew-modal .btn-primary');
@@ -4496,6 +4505,13 @@
                     updateWalletDisplay(data.remaining_credit);
                 }
                 queueSilentServerRefresh(serverId);
+            } else if (data.code === 'pricing_changed') {
+                window.EveRenewals.accept(Object.assign({}, data, {operation_id: operationId,
+                    localFailure: true, final_state: 'NOT_APPLIED'}), {serverId, inboundId, email, operationId});
+                document.getElementById('renew-modal').classList.remove('hidden');
+                if (usePackage) loadRenewPackages({force: true});
+                else calculateRenewCustomPrice();
+                showToast(_t('Review the updated price before confirming.'), 'error');
             } else if (data.code === 'renew_in_progress') {
                 // The renew is already running (slow v3.4 panel + a retry). Don't
                 // throw a red error — open the result modal in an amber "in progress"
@@ -4598,10 +4614,37 @@
         const addFreeToggle = document.getElementById('add-client-free-toggle');
         if (addFreeToggle) addFreeToggle.checked = false;
         selectedPackageId = null;
+        const pricingReseller = document.getElementById('add-pricing-reseller');
+        if (pricingReseller) {
+            pricingReseller.value = '';
+            loadAddPricingResellers(pricingReseller);
+        }
         loadPackages();
         calculateCustomPrice();
         updateAddPriceDisplay();
         document.getElementById('add-client-modal').classList.remove('hidden');
+    }
+
+    async function loadAddPricingResellers(select) {
+        try {
+            const response = await fetch('/api/admins', {cache: 'no-store'});
+            if (!response.ok) return;
+            const rows = await response.json();
+            if (!Array.isArray(rows)) return;
+            select.length = 1;
+            for (const row of rows) {
+                if (row.role === 'reseller' && row.enabled !== false) select.add(new Option(row.username, row.id));
+            }
+            document.getElementById('add-pricing-reseller-field').classList.toggle('hidden', select.length < 2);
+        } catch (_) {
+            // The default remains the system billing account.
+        }
+    }
+
+    function onPricingResellerChanged() {
+        selectedPackageId = null;
+        loadPackages();
+        calculateCustomPrice();
     }
 
     function escapePackageHtml(value) {
@@ -4627,16 +4670,24 @@
         return `<div dir="${dir}" style="font-weight: 600; font-size: 0.85rem; margin-bottom: 4px; line-height: 1.35; color: var(--text-secondary); width: 100%; text-align: center; unicode-bidi: isolate; overflow-wrap: anywhere;">${escapePackageHtml(name || '')}</div>`;
     }
 
+    function packageChargeText(packageRow) {
+        return packageRow.quota_mib
+            ? (Number(packageRow.quota_mib) / 1024).toLocaleString() + ' GB'
+            : (Number(packageRow.price) || 0).toLocaleString() + ' T';
+    }
+
     async function loadPackages() {
         const container = document.getElementById('packages-list');
         if (!container) return;
         const serverId = document.getElementById('add-client-server-select').value;
+        const resellerId = document.getElementById('add-pricing-reseller')?.value || '';
         container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">' + _t('Loading packages...') + '</div>';
         try {
-            const params = new URLSearchParams({purpose: 'create', server_id: serverId, _: Date.now()});
+            const params = new URLSearchParams({purpose: 'create', server_id: serverId, reseller_id: resellerId, _: Date.now()});
             const res = await fetch(`/api/packages?${params}`, { cache: 'no-store' });
             const pkgs = await res.json();
-            if (document.getElementById('add-client-server-select').value !== serverId) return;
+            if (document.getElementById('add-client-server-select').value !== serverId ||
+                (document.getElementById('add-pricing-reseller')?.value || '') !== resellerId) return;
             
             if (!Array.isArray(pkgs) || pkgs.length === 0) {
                 container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">' + _t('No packages defined') + '</div>';
@@ -4645,10 +4696,10 @@
             }
 
             container.innerHTML = pkgs.map(p => `
-                <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" data-onclick="selectPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0})"
+                <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" data-quote-revision="${escapePackageAttr(p.quote_revision || '')}" data-quota-mib="${Number(p.quota_mib) || 0}" data-onclick="selectPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0})"
                      style="border: 1px solid var(--border-color); padding: 8px; border-radius: 6px; cursor: pointer; transition: 0.2s; background: var(--bg-dark); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 60px;">
                     ${renderPackageTitle(p.name)}
-                    <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${(Number(p.price) || 0).toLocaleString()} T</div>
+                    <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${packageChargeText(p)}</div>
                 </div>
             `).join('');
 
@@ -4657,11 +4708,15 @@
                 if (active) {
                     active.style.borderColor = 'var(--primary)';
                     active.style.backgroundColor = 'rgba(99, 102, 241, 0.1)';
+                } else {
+                    selectedPackageId = null;
+                    calculateCustomPrice();
                 }
                 updateAddPriceDisplay();
             }
         } catch (e) {
-            if (document.getElementById('add-client-server-select').value !== serverId) return;
+            if (document.getElementById('add-client-server-select').value !== serverId ||
+                (document.getElementById('add-pricing-reseller')?.value || '') !== resellerId) return;
             container.innerHTML = '<div style="grid-column: span 2; color: var(--danger); text-align: center;">' + _t('Error loading packages') + '</div>';
             selectedPackageId = null;
         }
@@ -4692,7 +4747,9 @@
         const freeEl = document.getElementById('renew-payable-free');
 
         const normalized = Number(amount) || 0;
-        target.textContent = normalized.toLocaleString();
+        target.textContent = pricingCostText(normalized, selectedRenewPackageId ?
+            getPackageCard('#renew-packages-list', selectedRenewPackageId)?.dataset.quotaMib : renewCustomQuote?.quota_mib,
+            'renew-payable-unit');
 
         const isFree = Boolean(document.getElementById('renew-free-toggle')?.checked);
         if (isFree) {
@@ -4719,10 +4776,10 @@
         }
 
         container.innerHTML = pkgs.map(p => `
-                <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" data-package-name="${escapePackageAttr(p.name || '')}" data-onclick="selectRenewPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0}, ${Number(p.days) || 0}, ${Number(p.volume) || 0})"
+            <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" data-quote-revision="${escapePackageAttr(p.quote_revision || '')}" data-quota-mib="${Number(p.quota_mib) || 0}" data-package-name="${escapePackageAttr(p.name || '')}" data-onclick="selectRenewPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0}, ${Number(p.days) || 0}, ${Number(p.volume) || 0})"
                      style="border: 1px solid var(--border-color); padding: 8px; border-radius: 6px; cursor: pointer; transition: 0.2s; background: var(--bg-dark); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 60px;">
                     ${renderPackageTitle(p.name)}
-                    <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${(Number(p.price) || 0).toLocaleString()} T</div>
+                <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${packageChargeText(p)}</div>
                 </div>
             `).join('');
 
@@ -4731,6 +4788,10 @@
             if (active) {
                 active.style.borderColor = 'var(--primary)';
                 active.style.backgroundColor = 'rgba(99, 102, 241, 0.1)';
+            refreshRenewPriceDisplay();
+        } else if (selectedRenewPackageId) {
+            selectedRenewPackageId = null;
+            calculateRenewCustomPrice();
             }
             refreshRenewPriceDisplay();
         }
@@ -4742,12 +4803,18 @@
         const container = document.getElementById('renew-packages-list');
         if (!container) return;
         const serverId = document.getElementById('renew-server-id').value;
-        if (!renewPackageCaches.has(serverId)) {
-            renewPackageCaches.set(serverId, {items: null, etag: '', fetchedAt: 0, inflight: null});
+        const email = document.getElementById('renew-email')?.value || '';
+        const inboundId = document.getElementById('renew-inbound-id')?.value || '';
+        const cacheKey = JSON.stringify([serverId, inboundId, USER_ROLE === 'reseller' ? '' : email]);
+        if (!renewPackageCaches.has(cacheKey)) {
+            if (renewPackageCaches.size >= 32) renewPackageCaches.delete(renewPackageCaches.keys().next().value);
+            renewPackageCaches.set(cacheKey, {items: null, etag: '', fetchedAt: 0, inflight: null});
         }
-        const renewPackageCache = renewPackageCaches.get(serverId);
+        const renewPackageCache = renewPackageCaches.get(cacheKey);
         const render = (items, settings) => {
-            if (document.getElementById('renew-server-id').value === serverId) {
+            if (document.getElementById('renew-server-id').value === serverId &&
+                (document.getElementById('renew-email')?.value || '') === email &&
+                (document.getElementById('renew-inbound-id')?.value || '') === inboundId) {
                 renderRenewPackages(items, settings);
             }
         };
@@ -4763,7 +4830,7 @@
         renewPackageCache.inflight = (async () => {
             const headers = {};
             if (renewPackageCache.etag) headers['If-None-Match'] = renewPackageCache.etag;
-            const params = new URLSearchParams({purpose: 'renew', server_id: serverId});
+            const params = new URLSearchParams({purpose: 'renew', server_id: serverId, inbound_id: inboundId, email});
             const res = await fetch(`/api/packages?${params}`, { headers, cache: 'no-cache' });
             if (res.status === 304) {
                 renewPackageCache.fetchedAt = Date.now();
@@ -4834,16 +4901,17 @@
         return daysCost + (vol * BASE_COST_GB);
     }
 
-    async function fetchCustomDynamicPrice(days, volume, serverId) {
+    async function fetchCustomDynamicPrice(days, volume, serverId, context) {
         const params = new URLSearchParams({
             days: String(Math.max(0, parseFloat(days || 0))),
-            volume_gb: String(Math.max(0, parseFloat(volume || 0)))
+            volume_gb: String(Math.max(0, parseFloat(volume || 0))),
+            ...context,
         });
         if (serverId) params.set('server_id', String(serverId));
         const res = await fetch(`/api/packages/min-price?${params.toString()}`, { cache: 'no-store' });
         const data = await res.json();
         if (!res.ok || !data || !data.success) throw new Error(data?.error || 'Pricing failed');
-        return Number(data.min_price || 0);
+        return data;
     }
 
     function calculateRenewCustomPrice() {
@@ -4856,12 +4924,17 @@
         if (costDisplay) costDisplay.innerText = total.toLocaleString();
         refreshRenewPriceDisplay(total);
         const seq = ++renewCustomPriceRequestSeq;
+        renewCustomQuote = null;
         const serverId = document.getElementById('renew-server-id')?.value || '';
-        fetchCustomDynamicPrice(days, vol, serverId).then(dynamicTotal => {
+        const email = document.getElementById('renew-email')?.value || '';
+        const inbound_id = document.getElementById('renew-inbound-id')?.value || '';
+        const unlimited = vol === 0 && document.getElementById('renew-custom-volume').value.trim() !== '';
+        fetchCustomDynamicPrice(days, vol, serverId, {purpose:'renew', email, inbound_id, unlimited: unlimited ? '1' : '0'}).then(quote => {
             if (seq !== renewCustomPriceRequestSeq || selectedRenewPackageId) return;
-            if (costDisplay) costDisplay.innerText = dynamicTotal.toLocaleString();
-            refreshRenewPriceDisplay(dynamicTotal);
-        }).catch(() => {});
+            renewCustomQuote = quote;
+            if (costDisplay) costDisplay.textContent = pricingCostText(quote.min_price, quote.quota_mib, 'renew-quote-unit');
+            refreshRenewPriceDisplay(Number(quote.min_price));
+        }).catch(() => { if (seq === renewCustomPriceRequestSeq && costDisplay) costDisplay.textContent = '—'; });
     }
 
     function refreshRenewPriceDisplay(prefetchedAmount) {
@@ -4896,19 +4969,33 @@
             updateAddPriceDisplay(total);
         }
         const seq = ++addCustomPriceRequestSeq;
+        addCustomQuote = null;
         const serverId = document.getElementById('add-client-server-select')?.value || '';
-        fetchCustomDynamicPrice(days, vol, serverId).then(dynamicTotal => {
+        const reseller_id = document.getElementById('add-pricing-reseller')?.value || '';
+        fetchCustomDynamicPrice(days, vol, serverId, {purpose:'create', reseller_id, unlimited: vol === 0 ? '1' : '0'}).then(quote => {
             if (seq !== addCustomPriceRequestSeq || selectedPackageId) return;
-            if (preview) preview.innerText = dynamicTotal.toLocaleString();
-            updateAddPriceDisplay(dynamicTotal);
-        }).catch(() => {});
+            addCustomQuote = quote;
+            if (preview) preview.textContent = pricingCostText(quote.min_price, quote.quota_mib, 'add-quote-unit');
+            updateAddPriceDisplay(Number(quote.min_price));
+        }).catch(() => { if (seq === addCustomPriceRequestSeq && preview) preview.textContent = '—'; });
+    }
+
+    function getPackageCard(containerSelector, packageId) {
+        return document.querySelector(`${containerSelector} .pkg-card[data-package-id="${packageId}"]`);
     }
 
     function getPackagePrice(containerSelector, packageId) {
-        const el = document.querySelector(`${containerSelector} .pkg-card[data-package-id="${packageId}"]`);
+        const el = getPackageCard(containerSelector, packageId);
         if (!el) return 0;
         const priceAttr = el.getAttribute('data-package-price');
         return Number(priceAttr || 0);
+    }
+
+    function pricingCostText(amount, quotaMib, unitId) {
+        const quota = Number(quotaMib || 0);
+        const unit = document.getElementById(unitId);
+        if (unit) unit.textContent = quota ? 'GB' : 'T';
+        return (quota ? quota / 1024 : Number(amount) || 0).toLocaleString();
     }
 
     function updateAddPriceDisplay(prefetchedAmount) {
@@ -4925,7 +5012,9 @@
         }
 
         const normalized = Number(total) || 0;
-        display.textContent = normalized.toLocaleString();
+        display.textContent = pricingCostText(normalized, selectedPackageId ?
+            getPackageCard('#packages-list', selectedPackageId)?.dataset.quotaMib : addCustomQuote?.quota_mib,
+            'add-payable-unit');
 
         const isFree = Boolean(document.getElementById('add-client-free-toggle')?.checked);
         if (isFree) {
@@ -4941,7 +5030,9 @@
 
     async function onServerSelected() {
         const serverId = document.getElementById('add-client-server-select').value;
+        selectedPackageId = null;
         loadPackages();
+        calculateCustomPrice();
         const inboundSelect = document.getElementById('add-client-inbound-select');
         inboundSelect.innerHTML = '<option value="">' + _t('-- Select Inbound --') + '</option>';
 
@@ -5451,12 +5542,21 @@
 
         if (usePackage) {
             payload.package_id = selectedPackageId;
+            payload.quote_revision = getPackageCard('#packages-list', selectedPackageId)?.dataset.quoteRevision;
         } else {
             const customDays = parseInt(document.getElementById('custom-days').value) || 0;
             const customVolume = parseInt(document.getElementById('custom-volume').value) || 0;
             if (customDays < 0 || customVolume < 0) return showToast(_t('Duration and volume cannot be negative'), 'error');
             payload.days = customDays;
             payload.volume = customVolume;
+            payload.quote_revision = addCustomQuote?.quote_revision;
+        }
+        const reseller = document.getElementById('add-pricing-reseller')?.value;
+        if (reseller) payload.reseller_id = Number(reseller);
+        if (!payload.free && !payload.quote_revision) {
+            if (usePackage) loadPackages();
+            else calculateCustomPrice();
+            return showToast(_t('Review the updated price before confirming.'), 'error');
         }
 
         // v3 multi-inbound: tell the backend every inbound this client should join.
@@ -5514,6 +5614,10 @@
                 setTimeout(() => {
                     refreshData(true, { force: true, serverId: inboundData.server_id });
                 }, 1200);
+            } else if (data.code === 'pricing_changed') {
+                if (usePackage) loadPackages();
+                else calculateCustomPrice();
+                showToast(_t('Review the updated price before confirming.'), 'error');
             } else {
                 showCreditAwareError(data.error || 'Error creating client', response.status);
             }

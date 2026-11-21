@@ -647,7 +647,7 @@
                     <input type="number" id="renew-custom-volume" class="form-input" value="10" min="0" max="10000" step="0.1" inputmode="decimal" data-oninput="calculateRenewCustomPrice()">
                 </div>
                 <div style="flex: 1.5; background: rgba(255,255,255,0.05); padding: 0 12px; border-radius: 8px; height: 42px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-color);">
-                    <span style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('Cost:') }} <strong id="renew-price-display" style="color: #fbbf24; margin-left: 4px;">0</strong> <span style="font-size: 0.75rem;">T</span></span>
+                    <span style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('Cost:') }} <strong id="renew-price-display" style="color: #fbbf24; margin-left: 4px;">0</strong> <span id="renew-quote-unit" style="font-size: 0.75rem;">T</span></span>
                 </div>
             </div>
 
@@ -665,7 +665,7 @@
                     <div style="color: #4ade80; display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: wrap; justify-content: flex-end;">
                         <strong id="renew-payable-display" style="font-size: 1.1rem;">0</strong>
                         <strong id="renew-payable-free" style="display:none; font-size: 1.1rem; color: #fbbf24;">0</strong>
-                        <span class="wallet-currency" style="font-size: 0.8rem;">T</span>
+                        <span id="renew-payable-unit" class="wallet-currency" style="font-size: 0.8rem;">T</span>
                     </div>
                 </div>
             </div>
@@ -963,7 +963,15 @@
                 </div>
             </div>
 
-            <div class="form-group">
+                {% if role != 'reseller' %}
+                <div class="form-group hidden" id="add-pricing-reseller-field">
+                    <label for="add-pricing-reseller">{{ 'مالک و حساب پرداخت‌کننده' if panel_lang == 'fa' else 'Service owner and billing account' }}</label>
+                    <select id="add-pricing-reseller" class="form-select" data-onchange="onPricingResellerChanged()">
+                        <option value="">{{ _('System') }}</option>
+                    </select>
+                </div>
+                {% endif %}
+                <div class="form-group">
                 <label>{{ _('Comment') }} <small style="color: var(--text-secondary); font-weight: normal;">{{ _('(optional — name, phone number, etc.)') }}</small></label>
                 <input type="text" id="add-client-comment" class="form-input" placeholder="">
             </div>
@@ -986,7 +994,7 @@
                     <input type="number" id="custom-volume" class="form-input" value="10" min="0" max="10000" data-oninput="calculateCustomPrice()">
                 </div>
                 <div style="flex: 1.5; background: rgba(255,255,255,0.05); padding: 0 12px; border-radius: 8px; height: 42px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-color);">
-                    <span style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('Cost:') }} <strong id="custom-price-display" style="color: #fbbf24; margin-left: 4px;">0</strong> <span style="font-size: 0.75rem;">T</span></span>
+                     <span style="font-size: 0.85rem; color: var(--text-secondary);">{{ _('Cost:') }} <strong id="custom-price-display" style="color: #fbbf24; margin-left: 4px;">0</strong> <span id="add-quote-unit" style="font-size: 0.75rem;">T</span></span>
                 </div>
             </div>
 
@@ -1004,7 +1012,7 @@
                     <div style="color: #4ade80; display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: wrap; justify-content: flex-end;">
                         <strong id="add-price-display" style="font-size: 1.1rem;">0</strong>
                         <strong id="add-price-free" style="display:none; font-size: 1.1rem; color: #fbbf24;">0</strong>
-                        <span class="wallet-currency" style="font-size: 0.8rem;">T</span>
+                        <span id="add-payable-unit" class="wallet-currency" style="font-size: 0.8rem;">T</span>
                     </div>
                 </div>
             </div>

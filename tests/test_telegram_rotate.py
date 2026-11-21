@@ -106,6 +106,7 @@ class TelegramRotateBase(unittest.TestCase):
         Admin.query.filter(Admin.username.like('rotate-test-%')).delete(
             synchronize_session=False)
         db.session.commit()
+        db.session.remove()
 
     def _admin(self, suffix, **kwargs):
         kwargs.setdefault('is_superadmin', True)
@@ -295,9 +296,10 @@ class PurchaseCommentTests(TelegramRotateBase):
         reviewer = self._admin('reviewer')
         captured = {}
 
-        def fake_add_client(server_id, inbound_id):
+        def fake_add_client(server_id, inbound_id, *, order_quote):
             from flask import request as flask_request
             captured.update(flask_request.get_json())
+            self.assertEqual(order_quote['package_id'], request_row.package_id)
             return jsonify({'success': True, 'client': {'email': 'acc1'}}), 200
 
         client_snapshot = {'email': 'acc1', 'id': 'uuid-1', 'raw_client': {}}

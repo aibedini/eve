@@ -2,7 +2,7 @@
 import json
 import logging
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 
 from flask import session
 from sqlalchemy import func
@@ -15,6 +15,9 @@ from panel.models import (
     Package,
     PriceTier,
     RenewalEvent,
+    ResellerContract,
+    ResellerOffer,
+    ServiceOwnership,
     SystemConfig,
     Transaction,
     UsageCounterState,
@@ -54,7 +57,7 @@ def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None
 
     tiers = (PriceTier.query
              .filter_by(is_active=True)
-             .order_by(PriceTier.priority.desc(), PriceTier.id.desc())
+             .order_by(PriceTier.priority.desc(), PriceTier.server_id.is_not(None).desc(), PriceTier.id.desc())
              .all())
 
     best_global = None
@@ -82,7 +85,7 @@ def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None
     return best_global
 
 
-def calculate_tariff_price(volume_gb, days, reseller_id=None, server_id=None, user=None):
+def calculate_tariff_price(volume_gb, days, reseller_id=None, server_id=None, user=None, *, include_duration=True):
     """Return wallet cost for a reseller, or the system tariff without one."""
     volume_gb, days = float(volume_gb or 0), float(days or 0)
     reseller = user if user and user.role == 'reseller' else None
@@ -110,7 +113,7 @@ def calculate_tariff_price(volume_gb, days, reseller_id=None, server_id=None, us
             cpg = calculate_reseller_price(reseller, base_price=cpg, cost_type='gb')
             cpd = calculate_reseller_price(reseller, base_price=cpd, cost_type='day')
     day_cost = days * cpd
-    if days == 0 and not tier and not explicit_cost:
+    if include_duration and days == 0 and not tier and not explicit_cost:
         day_cost = int(get_config('cost_per_day_unlimited', 0) or 0)
         if reseller:
             day_cost = calculate_reseller_price(reseller, base_price=day_cost, cost_type='day')
@@ -126,6 +129,197 @@ def reseller_sub_package_ids(reseller):
         return {int(value) for value in raw} if raw else None
     except (TypeError, ValueError):
         return None
+
+
+def pricing_owner(server_id, client_uuid=None, email=None, *, inbound_id=None):
+    """Resolve the service's payer independently of the logged-in operator."""
+    if client_uuid:
+        service = ServiceOwnership.query.filter_by(
+            server_id=server_id, client_uuid=client_uuid, revoked_at=None,
+        ).first()
+        if service:
+            return service.reseller_id
+    scope = ClientOwnership.query.join(Admin, Admin.id == ClientOwnership.reseller_id).filter(
+        ClientOwnership.server_id == server_id, Admin.role == 'reseller',
+    )
+    if client_uuid:
+        row = scope.filter(ClientOwnership.client_uuid == client_uuid).first()
+        if row:
+            return row.reseller_id
+    if email:
+        email_l = email.strip().lower()
+        if inbound_id is not None:
+            row = scope.filter(ClientOwnership.inbound_id == inbound_id,
+                               func.lower(ClientOwnership.client_email) == email_l).first()
+            if row:
+                service = ServiceOwnership.query.filter_by(
+                    server_id=server_id, client_uuid=row.client_uuid, revoked_at=None,
+                ).first() if row.client_uuid else None
+                return service.reseller_id if service else row.reseller_id
+        modern = ServiceOwnership.query.filter(
+            ServiceOwnership.server_id == server_id, ServiceOwnership.revoked_at.is_(None),
+            func.lower(ServiceOwnership.client_email_snapshot) == email_l,
+        ).limit(2).all()
+        if len(modern) == 1:
+            return modern[0].reseller_id
+        if inbound_id is None:
+            owners = scope.filter(func.lower(ClientOwnership.client_email) == email_l).with_entities(
+                ClientOwnership.reseller_id).distinct().limit(2).all()
+            if len(owners) == 1:
+                return owners[0][0]
+    return None
+
+
+def creation_reseller_id(actor, selected=None):
+    from panel.services.permissions import has_permission
+    if selected in (None, '', 0, '0'):
+        return actor.id if actor.role == 'reseller' else None
+    if actor.role == 'reseller' or not has_permission(actor, 'admins.write'):
+        raise PermissionError('You cannot create an account on behalf of a reseller')
+    selected_id = int(selected)
+    reseller = db.session.get(Admin, selected_id)
+    if not reseller or reseller.role != 'reseller' or not reseller.enabled:
+        raise ValueError('The selected reseller is unavailable')
+    return selected_id
+
+
+def package_in_catalog(package, reseller_id):
+    scope = package.scope or 'global'
+    if scope == 'global':
+        return True
+    if not reseller_id:
+        return False
+    if scope == 'personal':
+        return package.created_by == reseller_id
+    try:
+        return scope == 'assigned' and reseller_id in json.loads(package.assigned_reseller_ids or '[]')
+    except (TypeError, ValueError):
+        return False
+
+
+def package_allowed_in_panel(package, actor, reseller_id, action):
+    if not package.enabled or not package_in_catalog(package, reseller_id):
+        return False
+    if not getattr(package, 'show_on_' + action, True):
+        return False
+    if (package.scope or 'global') == 'global':
+        return True
+    role = 'superadmin' if actor.is_superadmin else actor.role
+    if role == 'support':
+        role = 'reseller' if reseller_id else 'admin'
+    if package.panel_roles is None:
+        return package.scope == 'assigned' and role == 'reseller'
+    return role in package.panel_roles.get(action, [])
+
+
+def catalog_offer(package, reseller_id):
+    return db.session.get(ResellerOffer, (reseller_id, package.id)) if reseller_id and package.id else None
+
+
+def customer_package_price(package, reseller_id=None, offer=None):
+    if offer is None:
+        offer = catalog_offer(package, reseller_id)
+    return offer.selling_price if offer and offer.selling_price is not None else int(package.price or 0)
+
+
+def customer_package_visible(package, reseller_id=None, channel='subscription', *, offer=None,
+                             selection=None):
+    if not package.enabled or not package_in_catalog(package, reseller_id):
+        return False
+    if channel != 'subscription' and package.is_trial:
+        return False
+    if channel == 'purchase':
+        return bool(package.show_on_create and (offer is None or offer.published is not False))
+    if channel == 'telegram_renew':
+        return bool(offer.published if offer and offer.published is not None else package.show_on_renew)
+    if offer and offer.published is not None:
+        return offer.published
+    if reseller_id and package.scope != 'personal' and selection is not None:
+        return package.id in selection
+    return bool(package.show_on_sub)
+
+
+def _round_money(amount, step=0):
+    if step:
+        amount = (amount / step).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * step
+    return int(amount)
+
+
+def pricing_quote(reseller, *, package=None, volume_gb=0, days=0, server_id=None,
+                  free=False, sale_amount=None, unlimited=False, include_duration=True):
+    """Resolve retail, money debit and quota debit once, before a panel write."""
+    if package is not None:
+        volume_gb, days = package.volume or 0, package.days or 0
+        unlimited = volume_gb == 0
+    volume_gb = int(volume_gb) if volume_gb == int(volume_gb) else volume_gb
+    days = int(days) if days == int(days) else days
+    reseller_id = reseller.id if reseller else None
+    contract = db.session.get(ResellerContract, reseller_id) if reseller_id else None
+    policy = contract.policy if contract else {}
+    mode = policy.get('mode', 'legacy')
+    tier = None
+    offer = catalog_offer(package, reseller_id) if package else None
+    if package:
+        retail = customer_package_price(package, reseller_id, offer)
+        reference = int(package.price or 0)
+    else:
+        reference = int(
+            Decimal(str(volume_gb)) * get_config('cost_per_gb')
+            + (Decimal(str(days)) * get_config('cost_per_day')
+               if days else (get_config('cost_per_day_unlimited') if include_duration else 0))
+        )
+        retail = reference
+        if 'retail_gb' in policy or 'retail_day' in policy:
+            retail = int(Decimal(str(volume_gb)) * policy.get('retail_gb', 0)
+                         + Decimal(str(days)) * policy.get('retail_day', 0))
+    quota = 0
+    if free:
+        amount = 0
+    elif not reseller:
+        amount = reference
+    elif mode == 'quota':
+        if unlimited:
+            raise ValueError('Unlimited volume cannot be charged to a traffic quota')
+        quota = int((Decimal(str(volume_gb)) * 1024).to_integral_value(rounding=ROUND_CEILING))
+        amount = 0
+    elif offer and offer.wholesale_price is not None:
+        amount = offer.wholesale_price
+        mode = 'package_override'
+    elif package and package.reseller_cost_mode == 'tariff':
+        amount, _, _, tier = calculate_tariff_price(volume_gb, days, reseller_id, server_id, reseller)
+        mode = 'tariff'
+    elif package and (package.reseller_cost_mode or 'auto') != 'auto':
+        amount = calculate_reseller_price(reseller, package=package, server_id=server_id)
+        mode = package.reseller_cost_mode
+    elif mode == 'fixed':
+        amount = policy['fixed']
+    elif mode == 'percent':
+        base = reference
+        if policy.get('basis') == 'net_sale':
+            if sale_amount is None:
+                raise ValueError('An approved customer sale is required for this revenue-share contract')
+            base = sale_amount
+        amount = _round_money(Decimal(base) * Decimal(str(policy['percent'])) / 100, policy.get('rounding', 0))
+    elif mode == 'tier' or not package:
+        amount, _, _, tier = calculate_tariff_price(
+            volume_gb, days, reseller_id, server_id, reseller, include_duration=include_duration)
+    else:
+        amount = calculate_reseller_price(reseller, package=package, server_id=server_id)
+    if not 0 <= amount <= 2147483647 or not 0 <= quota <= 2147483647:
+        raise ValueError('Price or quota is outside the supported range')
+    return {
+        'package_id': package.id if package else None, 'package_name': package.name if package else 'Custom',
+        'reseller_id': reseller_id, 'server_id': server_id, 'mode': mode,
+        'retail': retail, 'reference_price': reference,
+        'amount': amount, 'quota_mib': quota, 'volume_gb': volume_gb, 'days': days,
+        'contract_version': contract.version if contract else None,
+        'tier_id': tier.id if tier else None,
+    }
+
+
+def pricing_quote_revision(quote):
+    from hashlib import sha256
+    return sha256(json.dumps(quote, sort_keys=True, separators=(',', ':'), default=str).encode()).hexdigest()
 
 
 def calculate_reseller_price(user, base_price=None, package=None, cost_type=None, server_id=None):
@@ -192,59 +386,22 @@ def _build_sub_page_packages(owner, server_id=None) -> list[dict]:
       (including none) override those defaults.
     - No reseller (system/admin-managed): only global packages, standard price.
     """
-    import json as _j
     try:
         pkgs = Package.query.filter_by(enabled=True).order_by(Package.display_order, Package.id).all()
     except Exception:
         logger.exception("Failed to load subscription-page packages")
         raise
 
-    is_reseller = bool(owner and getattr(owner, 'role', None) == 'reseller')
-
-    shown_ids = None
-    if is_reseller:
-        shown_ids = reseller_sub_package_ids(owner)
+    reseller_id = owner.id if owner and owner.role == 'reseller' else None
+    shown_ids = reseller_sub_package_ids(owner) if reseller_id else None
+    offers = {row.package_id: row for row in ResellerOffer.query.filter_by(reseller_id=reseller_id)} if reseller_id else {}
 
     out = []
     for p in pkgs:
-        if not getattr(p, 'show_on_renew', True):
+        offer = offers.get(p.id)
+        if not customer_package_visible(p, reseller_id, offer=offer, selection=shown_ids):
             continue
-        scope = p.scope or 'global'
-        if is_reseller:
-            if p.created_by == owner.id:
-                # Reseller's own package — controlled by its own show_on_sub flag.
-                if not getattr(p, 'show_on_sub', False):
-                    continue
-                price = p.price
-            else:
-                # The reseller controls publication independently of wallet cost.
-                if scope == 'global':
-                    visible = True
-                elif scope == 'assigned':
-                    try:
-                        ids = _j.loads(p.assigned_reseller_ids or '[]')
-                    except Exception:
-                        ids = []
-                    visible = owner.id in ids
-                else:
-                    visible = False
-                if not visible:
-                    continue
-                # An empty list means the reseller has not configured an
-                # override yet. Inherit packages published by the admin until
-                # the reseller explicitly selects a custom set.
-                if shown_ids is not None:
-                    visible = p.id in shown_ids
-                else:
-                    visible = bool(getattr(p, 'show_on_sub', False))
-                if not visible:
-                    continue
-                price = p.price
-        else:
-            # System/admin-managed account: only global packages the admin ticked.
-            if scope != 'global' or not getattr(p, 'show_on_sub', False):
-                continue
-            price = p.price
+        price = offer.selling_price if offer and offer.selling_price is not None else p.price
         out.append({
             'id': p.id,
             'name': p.name,
@@ -659,12 +816,8 @@ def _recommendation_template_vars(server_id, sub_id: str, email: str = '', *,
         owner = None
         email_l = str(email or '').strip().lower()
         if email_l:
-            ownership = ClientOwnership.query.filter(
-                ClientOwnership.server_id == sid,
-                func.lower(ClientOwnership.client_email) == email_l,
-            ).first()
-            if ownership and ownership.reseller and ownership.reseller.role == 'reseller':
-                owner = ownership.reseller
+            reseller_id = pricing_owner(sid, email=email_l)
+            owner = db.session.get(Admin, reseller_id) if reseller_id else None
 
         recommendation = _build_subscription_package_recommendation(
             sid, account_sub_id, _build_sub_page_packages(owner, server_id=sid), terminal=terminal,

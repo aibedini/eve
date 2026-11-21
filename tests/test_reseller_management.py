@@ -15,8 +15,8 @@ os.environ['SERVER_PASSWORD_KEY'] = base64.urlsafe_b64encode(b'eve-reseller-test
 
 from app import app, db  # noqa: E402
 from panel.models import (  # noqa: E402
-    Admin, AdminSession, ClientOwnership, CustomerAccount, Package, PriceTier,
-    Server, ServiceOwnership, SystemConfig, Transaction,
+    Admin, AdminSession, ClientOperation, ClientOwnership, CustomerAccount, Package, PriceTier,
+    ResellerContract, ResellerOffer, Server, ServiceOwnership, SystemConfig, Transaction, WalletLedger,
 )
 from panel.services.billing import calculate_reseller_price  # noqa: E402
 from panel.services.sessions import create_session, resolve_session  # noqa: E402
@@ -38,7 +38,8 @@ class ResellerManagementTests(unittest.TestCase):
         os.unlink(_DB.name)
 
     def setUp(self):
-        for model in (ServiceOwnership, CustomerAccount, ClientOwnership, AdminSession,
+        for model in (WalletLedger, ClientOperation, ResellerOffer, ResellerContract,
+                      ServiceOwnership, CustomerAccount, ClientOwnership, AdminSession,
                       Transaction, PriceTier, Package, SystemConfig, Server, Admin):
             model.query.delete()
         db.session.commit()
@@ -257,3 +258,151 @@ class ResellerManagementTests(unittest.TestCase):
             'reseller_cost_per_day': None, 'reseller_cost_per_gb': 0})
         self.assertEqual(response.get_json()['tier']['reseller_cost_per_gb'], 0)
         self.assertIsNone(response.get_json()['tier']['reseller_cost_per_day'])
+
+    def test_catalog_publication_and_price_are_isolated_by_reseller(self):
+        from panel.services.billing import _build_sub_page_packages
+        package = Package(name='Shared', volume=20, days=30, price=150000, show_on_sub=True)
+        db.session.add(package)
+        db.session.commit()
+        endpoint = f'/api/reseller-pricing/{self.reseller.id}'
+        response = self.client.put(endpoint + f'/offer/{package.id}', json={
+            'selling_price': 180000, 'wholesale_price': 110000, 'published': True})
+        self.assertTrue(response.get_json()['success'])
+        self.assertEqual(_build_sub_page_packages(self.reseller)[0]['price'], 180000)
+        self.assertEqual(_build_sub_page_packages(self.other)[0]['price'], 150000)
+        self.assertEqual(_build_sub_page_packages(None)[0]['price'], 150000)
+        ops = self.client.get(f'/api/packages?purpose=create&reseller_id={self.reseller.id}').get_json()
+        self.assertEqual(ops[0]['price'], 110000)
+        with self.client.session_transaction() as session:
+            session['admin_id'] = self.reseller.id
+        response = self.client.put(f'/api/my-packages/{package.id}/offer', json={
+            'selling_price': 190000, 'wholesale_price': 1, 'published': False})
+        self.assertTrue(response.get_json()['success'])
+        self.assertEqual(_build_sub_page_packages(self.reseller), [])
+        self.assertEqual(self.client.get('/api/packages?purpose=create').get_json()[0]['price'], 110000)
+
+    def test_private_panel_permissions_and_separate_customer_publication(self):
+        from panel.services.billing import _build_sub_page_packages, package_allowed_in_panel
+        package = Package(
+            name='Private customer offer', volume=20, days=30, price=150000, show_on_sub=True,
+            scope='personal', created_by=self.reseller.id,
+        )
+        db.session.add(package)
+        db.session.commit()
+        self.assertEqual(len(_build_sub_page_packages(self.reseller)), 1)
+        self.assertEqual(_build_sub_page_packages(self.other), [])
+        self.assertFalse(package_allowed_in_panel(package, self.owner, self.reseller.id, 'renew'))
+        package.panel_roles = {'create': ['reseller'], 'renew': ['superadmin']}
+        db.session.commit()
+        _, service = self._ownership()
+        service.client_email_snapshot = 'client'
+        db.session.commit()
+        self.assertTrue(package_allowed_in_panel(package, self.reseller, self.reseller.id, 'create'))
+        rows = self.client.get(f'/api/packages?purpose=renew&server_id={self.server.id}&email=client').get_json()
+        self.assertEqual([p['id'] for p in rows], [package.id])
+        self.assertEqual(self.client.get('/api/packages?purpose=create').get_json(), [])
+
+    def test_billing_owner_uses_the_target_inbound_for_duplicate_legacy_names(self):
+        from panel.services.billing import pricing_owner
+        db.session.add_all([
+            ClientOwnership(reseller_id=self.reseller.id, server_id=self.server.id,
+                            inbound_id=1, client_uuid='first', client_email='same-name'),
+            ClientOwnership(reseller_id=self.other.id, server_id=self.server.id,
+                            inbound_id=2, client_uuid='second', client_email='same-name'),
+        ])
+        db.session.commit()
+        self.assertEqual(pricing_owner(self.server.id, email='same-name', inbound_id=1), self.reseller.id)
+        self.assertEqual(pricing_owner(self.server.id, email='same-name', inbound_id=2), self.other.id)
+        self.assertIsNone(pricing_owner(self.server.id, email='same-name'))
+
+    def test_contract_quotes_and_operator_independent_reservation(self):
+        from panel.services.billing import pricing_quote
+        from panel.services.client_operations import begin_client_operation, fail_client_operation
+        package = Package(name='Shared', volume=20, days=30, price=150000)
+        self.reseller.credit = 200000
+        db.session.add(package)
+        db.session.commit()
+        endpoint = f'/api/reseller-pricing/{self.reseller.id}'
+        response = self.client.put(endpoint, json={
+            'mode': 'percent', 'percent': 70, 'basis': 'reference', 'rounding': 1000, 'version': 0})
+        self.assertTrue(response.get_json()['success'])
+        stale = self.client.put(endpoint, json={'mode': 'fixed', 'fixed': 1, 'version': 0})
+        self.assertFalse(stale.get_json()['success'])
+        quote = pricing_quote(self.reseller, package=package, server_id=self.server.id)
+        self.assertEqual(quote['amount'], 105000)
+        kwargs = dict(idempotency_key='one-charge', action='renew', admin=self.owner,
+                      server_id=self.server.id, amount=quote['amount'], quote=quote)
+        op, state, _ = begin_client_operation(**kwargs)
+        self.assertEqual(state, 'new')
+        self.assertEqual(op.admin_id, self.owner.id)
+        self.assertEqual(op.billing_admin_id, self.reseller.id)
+        self.assertEqual(op.pricing_quote['contract_version'], 1)
+        db.session.refresh(self.reseller)
+        self.assertEqual(self.reseller.credit, 95000)
+        self.assertEqual(begin_client_operation(**kwargs)[1], 'in_progress')
+        fail_client_operation(op, 'confirmed rejected')
+        self.assertEqual(db.session.get(Admin, self.reseller.id).credit, 200000)
+        response = self.client.put(endpoint, json={'mode': 'percent', 'percent': 40,
+                                                  'basis': 'net_sale', 'version': 1})
+        self.assertTrue(response.get_json()['success'])
+        with self.assertRaisesRegex(ValueError, 'approved customer sale'):
+            pricing_quote(self.reseller, package=package)
+        self.assertEqual(pricing_quote(self.reseller, package=package, sale_amount=120000)['amount'], 48000)
+
+    def test_quota_grant_reservation_and_refund_are_idempotent(self):
+        from panel.services.billing import pricing_quote
+        from panel.services.client_operations import begin_client_operation, fail_client_operation
+        endpoint = f'/api/reseller-pricing/{self.reseller.id}'
+        self.assertTrue(self.client.put(endpoint, json={'mode': 'quota'}).get_json()['success'])
+        for _ in range(2):
+            self.assertTrue(self.client.post(endpoint + '/quota', json={'gb': 100, 'key': 'one-grant'}).get_json()['success'])
+        contract = db.session.get(ResellerContract, self.reseller.id)
+        self.assertEqual(contract.quota_mib, 102400)
+        quote = pricing_quote(self.reseller, volume_gb=20.5, days=30)
+        self.assertEqual((quote['amount'], quote['quota_mib']), (0, 20992))
+        with self.assertRaisesRegex(ValueError, 'Unlimited'):
+            pricing_quote(self.reseller, days=30, unlimited=True)
+        args = dict(idempotency_key='one-quota-operation', action='renew', admin=self.owner,
+                    server_id=self.server.id, amount=0, quote=quote)
+        op, state, _ = begin_client_operation(**args)
+        self.assertEqual(state, 'new')
+        self.assertEqual(begin_client_operation(**args)[1], 'in_progress')
+        db.session.refresh(contract)
+        self.assertEqual(contract.quota_mib, 81408)
+        fail_client_operation(op, 'confirmed rejected')
+        fail_client_operation(op, 'repeated failure')
+        self.assertEqual(db.session.get(ResellerContract, self.reseller.id).quota_mib, 102400)
+        self.assertEqual(WalletLedger.query.filter_by(account_type='reseller_quota').count(), 3)
+        args['idempotency_key'] = 'too-much'
+        args['quote'] = pricing_quote(self.reseller, volume_gb=101, days=30)
+        self.assertEqual(begin_client_operation(**args)[1], 'insufficient_credit')
+
+    def test_creation_requotes_after_contract_edit_and_records_reseller_as_payer(self):
+        self.reseller.credit = 200000
+        package = Package(name='Panel', volume=20, days=30, price=150000)
+        db.session.add(package)
+        db.session.commit()
+        endpoint = f'/api/reseller-pricing/{self.reseller.id}'
+        contract = {'mode': 'fixed', 'fixed': 110000, 'version': 0}
+        self.assertTrue(self.client.put(endpoint, json=contract).get_json()['success'])
+        list_url = f'/api/packages?purpose=create&reseller_id={self.reseller.id}&server_id={self.server.id}'
+        old = self.client.get(list_url).get_json()[0]
+        contract.update(fixed=115000, version=1)
+        self.assertTrue(self.client.put(endpoint, json=contract).get_json()['success'])
+        payload = {'mode': 'package', 'package_id': package.id, 'email': 'new-customer',
+                   'reseller_id': self.reseller.id, 'operation_id': 'pricing-request',
+                   'quote_revision': old['quote_revision']}
+        create_url = f'/api/client/{self.server.id}/1/add'
+        with patch('app.get_xui_session', return_value=(None, 'fixture rejects panel write')) as panel:
+            response = self.client.post(create_url, json=payload)
+            self.assertEqual(response.get_json()['code'], 'pricing_changed', response.get_json())
+            panel.assert_not_called()
+            payload['quote_revision'] = self.client.get(list_url).get_json()[0]['quote_revision']
+            self.client.post(create_url, json=payload)
+            panel.assert_called_once()
+        op = ClientOperation.query.filter_by(idempotency_key='pricing-request').one()
+        self.assertEqual(op.billing_admin_id, self.reseller.id)
+        self.assertEqual(op.amount, 115000)
+        self.assertEqual(op.state, 'failed')
+        db.session.refresh(self.reseller)
+        self.assertEqual(self.reseller.credit, 200000)

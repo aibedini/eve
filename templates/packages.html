@@ -10,20 +10,146 @@
     <div class="settings-sidebar">
         <button class="settings-tab active" data-onclick="pkgSwitchTab('packages', event)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8h5l3 3-3 3h-5"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/></svg>
-            General Packages
+            {{ 'پکیج‌ها' if panel_lang == 'fa' else 'Packages' }}
         </button>
         <button class="settings-tab" data-onclick="pkgSwitchTab('resellers', event)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            Reseller Packages
+            {{ 'دسترسی رسلر' if panel_lang == 'fa' else 'Reseller Access' }}
         </button>
         <button class="settings-tab" data-onclick="pkgSwitchTab('tariffs', event)">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-            Base Tariffs
+            {{ 'تعرفه‌ها' if panel_lang == 'fa' else 'Tariffs' }}
+        </button>
+        <button class="settings-tab" type="button" data-onclick="pkgSwitchTab('contracts', event)">
+            {{ 'قرارداد و کاتالوگ رسلر' if panel_lang == 'fa' else 'Reseller Pricing' }}
         </button>
     </div>
 
     <!-- Content area -->
     <div class="settings-content">
+        {% include "partials/pricing_guide.html" %}
+
+        <div id="tab-contracts" class="tab-pane">
+            <section class="panel-card pricing-section" aria-labelledby="pricing-contract-title">
+                <h2 id="pricing-contract-title">{{ 'قرارداد رسلر' if panel_lang == 'fa' else 'Reseller contract' }}</h2>
+                <div class="form-group">
+                    <label for="pricing-reseller">{{ 'رسلر' if panel_lang == 'fa' else 'Reseller' }}</label>
+                    <select id="pricing-reseller" class="form-select" data-onchange="loadPricingContract()">
+                        <option value="">{{ 'انتخاب رسلر' if panel_lang == 'fa' else 'Choose reseller' }}</option>
+                    </select>
+                </div>
+                <div id="pricing-settings" class="hidden">
+                    <div class="form-group">
+                        <label for="pricing-mode">{{ 'روش تسویه' if panel_lang == 'fa' else 'Billing method' }}</label>
+                        <select id="pricing-mode" class="form-select" data-onchange="updatePricingFields()">
+                            <option value="legacy">{{ 'تنظیمات قبلی' if panel_lang == 'fa' else 'Existing settings' }}</option>
+                            <option value="fixed">{{ 'مبلغ ثابت هر عملیات' if panel_lang == 'fa' else 'Fixed per operation' }}</option>
+                            <option value="tier">{{ 'تعرفه گیگ و روز' if panel_lang == 'fa' else 'GB and day tariffs' }}</option>
+                            <option value="percent">{{ 'درصدی' if panel_lang == 'fa' else 'Percentage' }}</option>
+                            <option value="quota">{{ 'سهمیه حجمی' if panel_lang == 'fa' else 'Prepaid traffic quota' }}</option>
+                        </select>
+                    </div>
+                    <div id="pricing-fixed-fields" class="form-group hidden">
+                        <label for="pricing-fixed">{{ 'هزینه ثابت (تومان)' if panel_lang == 'fa' else 'Fixed cost (Toman)' }}</label>
+                        <input id="pricing-fixed" type="number" min="0" step="1">
+                    </div>
+                    <div id="pricing-percent-fields" class="pricing-grid hidden">
+                        <div class="form-group">
+                            <label for="pricing-basis">{{ 'مبنای درصد' if panel_lang == 'fa' else 'Percentage basis' }}</label>
+                            <select id="pricing-basis" class="form-select">
+                                <option value="reference">{{ 'قیمت مرجع سیستم' if panel_lang == 'fa' else 'System reference price' }}</option>
+                                <option value="net_sale">{{ 'فروش خالص تأییدشده' if panel_lang == 'fa' else 'Approved net sale' }}</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="pricing-percent">{{ 'سهم سیستم (٪)' if panel_lang == 'fa' else 'System share (%)' }}</label>
+                            <input id="pricing-percent" type="number" min="0" max="100" step="0.01">
+                        </div>
+                        <div class="form-group">
+                            <label for="pricing-rounding">{{ 'گام رندکردن (تومان)' if panel_lang == 'fa' else 'Rounding step (Toman)' }}</label>
+                            <input id="pricing-rounding" type="number" min="0" step="1">
+                        </div>
+                    </div>
+                    <details class="pricing-details">
+                        <summary>{{ 'قیمت فروش سفارش سفارشی' if panel_lang == 'fa' else 'Custom retail rates' }}</summary>
+                        <p class="field-note">{{ 'فیلدها را خالی بگذارید تا قیمت مرجع سیستم استفاده شود. اگر یکی را وارد کنید، فقط نرخ‌های واردشده محاسبه می‌شوند.' if panel_lang == 'fa' else 'Leave both empty to inherit system pricing. If set, only the entered rates are charged.' }}</p>
+                        <div class="pricing-grid">
+                            <div class="form-group">
+                                <label for="pricing-retail-gb">{{ 'فروش هر گیگ (تومان)' if panel_lang == 'fa' else 'Retail per GB (Toman)' }}</label>
+                                <input id="pricing-retail-gb" type="number" min="0" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label for="pricing-retail-day">{{ 'فروش هر روز (تومان)' if panel_lang == 'fa' else 'Retail per day (Toman)' }}</label>
+                                <input id="pricing-retail-day" type="number" min="0" step="1">
+                            </div>
+                        </div>
+                    </details>
+                    <button type="button" class="btn btn-primary" data-onclick="savePricingContract(this)">{{ 'ذخیره قرارداد' if panel_lang == 'fa' else 'Save contract' }}</button>
+                    <div id="pricing-quota-fields" class="pricing-details hidden">
+                        <p id="pricing-quota-balance"></p>
+                        <div class="form-group">
+                            <label for="pricing-quota">{{ 'افزایش سهمیه (گیگ)' if panel_lang == 'fa' else 'Quota to add (GB)' }}</label>
+                            <input id="pricing-quota" type="number" min="1" step="1">
+                        </div>
+                        <button type="button" class="btn btn-secondary" data-onclick="grantPricingQuota(this)">{{ 'افزودن سهمیه' if panel_lang == 'fa' else 'Add quota' }}</button>
+                    </div>
+                </div>
+                <p id="pricing-status" role="status" class="field-note"></p>
+            </section>
+            <section id="pricing-catalog" class="panel-card pricing-section hidden" aria-labelledby="pricing-catalog-title">
+                <h2 id="pricing-catalog-title">{{ 'کاتالوگ فروش رسلر' if panel_lang == 'fa' else 'Reseller sales catalog' }}</h2>
+                <div class="form-group">
+                    <label for="pricing-offer">{{ 'پکیج' if panel_lang == 'fa' else 'Package' }}</label>
+                    <select id="pricing-offer" class="form-select" data-onchange="showPricingOffer()"></select>
+                </div>
+                <div class="pricing-grid">
+                    <div class="form-group">
+                        <label for="pricing-offer-retail">{{ 'قیمت فروش (تومان)' if panel_lang == 'fa' else 'Retail price (Toman)' }}</label>
+                        <input id="pricing-offer-retail" type="number" min="0" step="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="pricing-offer-wholesale">{{ 'هزینه ویژه رسلر (تومان)' if panel_lang == 'fa' else 'Wholesale override (Toman)' }}</label>
+                        <input id="pricing-offer-wholesale" type="number" min="0" step="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="pricing-offer-visible">{{ 'نمایش به مشتری' if panel_lang == 'fa' else 'Customer publication' }}</label>
+                        <select id="pricing-offer-visible" class="form-select">
+                            <option value="">{{ 'ارث‌بری' if panel_lang == 'fa' else 'Inherit' }}</option>
+                            <option value="true">{{ 'نمایش' if panel_lang == 'fa' else 'Show' }}</option>
+                            <option value="false">{{ 'پنهان' if panel_lang == 'fa' else 'Hide' }}</option>
+                        </select>
+                    </div>
+                </div>
+                <button type="button" class="btn btn-primary" data-onclick="savePricingOffer(this)">{{ 'ذخیره قیمت و نمایش' if panel_lang == 'fa' else 'Save price and visibility' }}</button>
+            </section>
+            <section id="pricing-preview" class="panel-card pricing-section hidden" aria-labelledby="pricing-preview-title">
+                <h2 id="pricing-preview-title">{{ 'پیش‌نمایش قیمت' if panel_lang == 'fa' else 'Price preview' }}</h2>
+                <div class="pricing-grid">
+                    <div class="form-group">
+                        <label for="pricing-preview-package">{{ 'پکیج یا سفارش سفارشی' if panel_lang == 'fa' else 'Package or custom order' }}</label>
+                        <select id="pricing-preview-package" class="form-select"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="pricing-preview-server">{{ 'سرور' if panel_lang == 'fa' else 'Server' }}</label>
+                        <select id="pricing-preview-server" class="form-select"><option value="">{{ 'بدون سرور مشخص' if panel_lang == 'fa' else 'No specific server' }}</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="pricing-preview-volume">{{ 'حجم سفارشی (گیگ)' if panel_lang == 'fa' else 'Custom volume (GB)' }}</label>
+                        <input id="pricing-preview-volume" type="number" min="0" step="any">
+                    </div>
+                    <div class="form-group">
+                        <label for="pricing-preview-days">{{ 'مدت سفارشی (روز)' if panel_lang == 'fa' else 'Custom duration (days)' }}</label>
+                        <input id="pricing-preview-days" type="number" min="0" step="any">
+                    </div>
+                    <div class="form-group">
+                        <label for="pricing-preview-sale">{{ 'فروش خالص (برای شبیه‌سازی قرارداد درصدی)' if panel_lang == 'fa' else 'Net sale (for simulating revenue share)' }}</label>
+                        <input id="pricing-preview-sale" type="number" min="0" step="1">
+                    </div>
+                </div>
+                <button type="button" class="btn btn-secondary" data-onclick="previewPricing(this)">{{ 'محاسبه' if panel_lang == 'fa' else 'Calculate' }}</button>
+                <p id="pricing-preview-result" role="status" class="field-note"></p>
+            </section>
+        </div>
 
         <!-- ═══ Tab 1: General Packages ═══ -->
         <div id="tab-packages" class="tab-pane active">
@@ -87,7 +213,7 @@
                     </div>
                     <button class="btn btn-primary" data-onclick="saveBaseConfig()">Save</button>
                 </div>
-                <div style="padding: 0 20px 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+                <div class="pricing-grid pricing-section">
                     <div class="form-group">
                         <label>Price per GB (Toman)</label>
                         <input type="text" id="conf-cost-gb" class="form-input" value="{{ '{:,}'.format(base_cost_gb) }}" data-oninput="formatNumberInput(this)">
@@ -211,15 +337,32 @@
                     <input type="checkbox" id="pkg-show-on-create" checked>
                     <span class="slider"></span>
                 </div>
-                <span>Show on Create <small style="color:var(--text-secondary); font-weight:normal;">(add-client modal &amp; bot purchase list)</small></span>
+                <span>{{ 'فعال در ساخت اکانت' if panel_lang == 'fa' else 'Enable account creation' }}</span>
             </label>
             <label class="form-group form-toggle-item" style="cursor:pointer; margin-top:4px;">
                 <div class="toggle-switch">
                     <input type="checkbox" id="pkg-show-on-renew" checked>
                     <span class="slider"></span>
                 </div>
-                <span>Show on Renew <small style="color:var(--text-secondary); font-weight:normal;">(renew modal, bot renewal &amp; subscription page)</small></span>
+                <span>{{ 'فعال در تمدید دستی پنل' if panel_lang == 'fa' else 'Enable manual panel renewal' }}</span>
             </label>
+            <fieldset id="pkg-role-fields" class="pricing-details hidden">
+                <legend>{{ 'دسترسی پکیج خصوصی در پنل' if panel_lang == 'fa' else 'Private package access in the panel' }}</legend>
+                <div class="pricing-grid">
+                    {% for action, title_fa, title_en in [('create', 'ساخت اکانت', 'Create account'), ('renew', 'تمدید اکانت', 'Renew account')] %}
+                    <div>
+                        <strong>{{ title_fa if panel_lang == 'fa' else title_en }}</strong>
+                        {% for key, fa, en in [('reseller', 'رسلر', 'Reseller'), ('admin', 'ادمین', 'Admin'), ('superadmin', 'سوپرادمین', 'Superadmin')] %}
+                        <label class="checkbox-label pricing-checkbox">
+                            <input type="checkbox" id="pkg-role-{{ action }}-{{ key }}">
+                            <span class="checkmark"></span><span>{{ fa if panel_lang == 'fa' else en }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    {% endfor %}
+                </div>
+                <p class="field-note">{{ 'این دسترسی فقط برای عملیات روی حساب همان رسلر است. انتشار برای مشتری جداگانه تنظیم می‌شود.' if panel_lang == 'fa' else 'These permissions apply to the selected reseller’s accounts. Customer publication is separate.' }}</p>
+            </fieldset>
             <div class="form-actions">
                 <button class="btn btn-secondary" type="button" data-onclick="closePkgModal()">Cancel</button>
                 <button class="btn btn-primary" id="pkg-submit-btn" type="button" data-onclick="submitPackage()">Create Package</button>
@@ -282,6 +425,12 @@
                 <input type="text" id="tier-reseller-cpd" class="form-input" inputmode="numeric" data-oninput="formatNumberInput(this)">
                 <small class="field-note">{{ 'هر دو خالی: تنظیمات فعلی. اگر یکی پر باشد، فقط همان محاسبه می‌شود؛ اگر هر دو پر باشند، جمع می‌شوند. حد بالای بازه شامل نمی‌شود.' if panel_lang == 'fa' else 'Both blank: existing settings. Fill one to charge only that rate, or both to add them. Range upper bounds are exclusive.' }}</small>
             </div>
+            <div class="form-group">
+                <label for="tier-server">{{ 'سرور' if panel_lang == 'fa' else 'Server' }}</label>
+                <select id="tier-server" class="form-select">
+                    <option value="">{{ 'همه سرورها' if panel_lang == 'fa' else 'All servers' }}</option>
+                </select>
+            </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
                     <label>Reseller (blank = global)</label>
@@ -310,12 +459,14 @@
 <style nonce="{{ csp_nonce }}">
     .settings-layout {
         display: grid;
-        grid-template-columns: 220px 1fr;
+        grid-template-columns: 220px minmax(0, 1fr);
         gap: 24px;
         align-items: start;
     }
     @media (max-width: 768px) {
-        .settings-layout { grid-template-columns: 1fr; }
+        .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+        .settings-sidebar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+        .settings-tab { min-block-size: 44px; margin: 0; }
     }
     .settings-sidebar {
         background: var(--bg-card);
@@ -531,6 +682,202 @@ document.addEventListener('click', (e) => {
     }
 });
 
+let pricingState = null;
+let quotaGrant = null;
+let pricingServers = null;
+const pricingField = id => document.getElementById('pricing-' + id);
+const pricingValue = id => pricingField(id).value;
+const pricingEndpoint = () => '/api/reseller-pricing/' + encodeURIComponent(pricingValue('reseller'));
+
+async function pricingRequest(url, method = 'GET', data) {
+    const response = await packageFetch(url, {
+        method, headers: {'Content-Type': 'application/json'},
+        body: data === undefined ? undefined : JSON.stringify(data),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) throw new Error(result.error || pkgT('Request failed', 'درخواست ناموفق بود'));
+    return result;
+}
+
+async function loadPricingServers() {
+    try {
+        if (!pricingServers) {
+            const response = await packageFetch('/api/servers');
+            if (!response.ok) return;
+            const data = await response.json();
+            pricingServers = Array.isArray(data) ? data : data.servers || [];
+        }
+        for (const id of ['pricing-preview-server', 'tier-server']) {
+            const serverSelect = document.getElementById(id);
+            const previous = serverSelect.value;
+            serverSelect.length = 1;
+            for (const row of pricingServers) serverSelect.add(new Option(row.name, row.id));
+            if (previous) serverSelect.value = previous;
+        }
+    } catch (_) {
+        // Preview can still run without a server.
+    }
+}
+
+async function openPricingContracts() {
+    await loadResellerList();
+    const select = pricingField('reseller');
+    const selected = select.value;
+    select.length = 1;
+    for (const row of _resellerCache) {
+        if (row.enabled !== false) select.add(new Option(row.username, row.id));
+    }
+    select.value = selected;
+    loadPricingServers();
+    await loadPricingContract();
+}
+
+function updatePricingFields() {
+    const mode = pricingValue('mode');
+    for (const method of ['fixed', 'percent', 'quota']) {
+        pricingField(method + '-fields').classList.toggle('hidden', method !== mode);
+    }
+}
+
+async function loadPricingContract() {
+    const selected = pricingValue('reseller');
+    const endpoint = pricingEndpoint();
+    pricingState = null;
+    pricingField('preview-result').textContent = '';
+    for (const name of ['settings', 'catalog', 'preview']) pricingField(name).classList.add('hidden');
+    pricingField('status').textContent = selected ? pkgT('Loading contract…', 'در حال دریافت قرارداد…') : '';
+    if (!selected) return;
+    try {
+        const data = await pricingRequest(endpoint);
+        if (pricingValue('reseller') !== selected) return;
+        pricingState = data;
+        for (const [name, value] of Object.entries({
+            mode: data.policy.mode, fixed: data.policy.fixed, percent: data.policy.percent,
+            basis: data.policy.basis || 'reference', rounding: data.policy.rounding,
+            'retail-gb': data.policy.retail_gb, 'retail-day': data.policy.retail_day,
+        })) pricingField(name).value = value ?? '';
+        pricingField('quota-balance').textContent =
+            pkgT('Available traffic quota', 'سهمیه قابل استفاده') + ' · ' + (data.quota_mib / 1024).toLocaleString() + ' GB';
+        pricingField('quota').value = '';
+        for (const name of ['offer', 'preview-package']) {
+            const select = pricingField(name);
+            const previous = select.value;
+            select.replaceChildren();
+            if (name === 'preview-package') select.add(new Option(pkgT('Custom', 'سفارشی'), ''));
+            for (const item of data.packages) select.add(new Option(item.name, item.id));
+            if (previous && [...select.options].some(option => option.value === previous)) select.value = previous;
+        }
+        showPricingOffer();
+        updatePricingFields();
+        pricingField('settings').classList.remove('hidden');
+        pricingField('preview').classList.remove('hidden');
+        pricingField('catalog').classList.toggle('hidden', !data.packages.length);
+        pricingField('status').textContent = '';
+    } catch (error) {
+        if (pricingValue('reseller') === selected) pricingField('status').textContent = error.message;
+    }
+}
+
+function showPricingOffer() {
+    const item = pricingState?.packages.find(row => String(row.id) === pricingValue('offer'));
+    pricingField('offer-retail').value = item?.selling_price ?? '';
+    pricingField('offer-retail').placeholder = String(item?.price ?? '');
+    pricingField('offer-wholesale').value = item?.wholesale_price ?? '';
+    pricingField('offer-visible').value = item?.published == null ? '' : String(item.published);
+}
+
+async function pricingAction(button, action, target = 'status') {
+    const selected = pricingValue('reseller');
+    button.disabled = true;
+    pricingField(target).textContent = pkgT('Working…', 'در حال انجام…');
+    try {
+        await action();
+    } catch (error) {
+        if (pricingValue('reseller') === selected) pricingField(target).textContent = error.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function savePricingContract(button) {
+    if (!pricingState) return;
+    const endpoint = pricingEndpoint();
+    const policy = {
+        mode: pricingValue('mode'), version: pricingState.version, fixed: pricingValue('fixed'),
+        percent: pricingValue('percent'), basis: pricingValue('basis'), rounding: pricingValue('rounding'),
+        retail_gb: pricingValue('retail-gb'), retail_day: pricingValue('retail-day'),
+    };
+    return pricingAction(button, async () => {
+        await pricingRequest(endpoint, 'PUT', policy);
+        if (pricingEndpoint() !== endpoint) return;
+        await loadPricingContract();
+        pricingField('status').textContent = pkgT('Contract saved', 'قرارداد ذخیره شد');
+    });
+}
+
+function savePricingOffer(button) {
+    const endpoint = pricingEndpoint();
+    const choice = pricingValue('offer-visible');
+    const data = {
+        selling_price: pricingValue('offer-retail'), wholesale_price: pricingValue('offer-wholesale'),
+        published: choice === '' ? null : choice === 'true',
+    };
+    return pricingAction(button, async () => {
+        await pricingRequest(endpoint + '/offer/' + pricingValue('offer'), 'PUT', data);
+        if (pricingEndpoint() !== endpoint) return;
+        await loadPricingContract();
+        pricingField('status').textContent = pkgT('Catalog saved', 'کاتالوگ ذخیره شد');
+        showToast(pkgT('Catalog saved', 'کاتالوگ ذخیره شد'));
+    });
+}
+
+function grantPricingQuota(button) {
+    const endpoint = pricingEndpoint();
+    const gb = pricingValue('quota');
+    if (!quotaGrant || quotaGrant.endpoint !== endpoint || quotaGrant.gb !== gb) {
+        quotaGrant = {endpoint, gb, key: crypto.randomUUID?.() || Date.now() + '-' + Math.random()};
+    }
+    const key = quotaGrant.key;
+    return pricingAction(button, async () => {
+        await pricingRequest(endpoint + '/quota', 'POST', {gb, key});
+        quotaGrant = null;
+        if (pricingEndpoint() !== endpoint) return;
+        await loadPricingContract();
+        pricingField('status').textContent = pkgT('Quota credited', 'سهمیه اضافه شد');
+    });
+}
+
+function previewPricing(button) {
+    const endpoint = pricingEndpoint();
+    const params = new URLSearchParams({
+        package_id: pricingValue('preview-package'), server_id: pricingValue('preview-server'),
+        volume_gb: pricingValue('preview-volume') || 0, days: pricingValue('preview-days') || 0,
+        sale_amount: pricingValue('preview-sale'),
+    });
+    return pricingAction(button, async () => {
+        const {quote} = await pricingRequest(endpoint + '/preview?' + params);
+        if (pricingEndpoint() !== endpoint) return;
+        const t = number => Number(number).toLocaleString() + ' T';
+        const parts = [
+            pkgT('Customer price', 'قیمت مشتری') + ' · ' + t(quote.retail),
+            pkgT('Reseller charge', 'کسر از رسلر') + ' · ' +
+                (quote.quota_mib ? (quote.quota_mib / 1024).toLocaleString() + ' GB' : t(quote.amount)),
+        ];
+        if (quote.tier_id) parts.push(pkgT('Tier', 'تعرفه') + ' #' + quote.tier_id);
+        if (quote.published !== undefined) parts.push(quote.published ?
+            pkgT('Visible to customer', 'نمایش برای مشتری') : pkgT('Hidden from customer', 'پنهان از مشتری'));
+        if (quote.panel_access) {
+            for (const [action, roles] of Object.entries(quote.panel_access)) {
+                parts.push((action === 'create' ? pkgT('Create', 'ساخت') : pkgT('Renew', 'تمدید')) +
+                    ' · ' + (roles.map(role => ({admin: pkgT('Admin', 'ادمین'),
+                        superadmin: pkgT('Superadmin', 'سوپرادمین'), reseller: pkgT('Reseller', 'رسلر')})[role]).join(', ')
+                        || pkgT('Hidden in panel', 'پنهان در پنل')));
+            }
+        }
+        pricingField('preview-result').textContent = parts.join(' | ');
+    }, 'preview-result');
+}
+
 /* ─── Tab switching ────────────────────────────────────────── */
 function pkgSwitchTab(name, evt) {
     document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
@@ -539,7 +886,8 @@ function pkgSwitchTab(name, evt) {
     document.getElementById('tab-' + name).classList.add('active');
     if (name === 'packages')  loadPackages();
     if (name === 'resellers') loadResellerTab();
-    if (name === 'tariffs')   { loadTiers(); loadResellerList(); }
+    if (name === 'tariffs')   { loadTiers(); loadResellerList(); loadPricingServers(); }
+    if (name === 'contracts') openPricingContracts();
 }
 
 /* ─── Load helpers ─────────────────────────────────────────── */
@@ -555,7 +903,7 @@ async function loadResellerList() {
 async function loadPackages() {
     const body = document.getElementById('pkg-list-body');
     try {
-        const res  = await packageFetch('/api/packages');
+        const res  = await packageFetch('/api/packages?include_archived=1');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         _pkgCache  = await res.json();
         renderPackages(body);
@@ -611,6 +959,7 @@ function renderPackages(body) {
             <div class="pkg-meta">
                 ${ownerBadge}
                 <span class="scope-badge ${scopeClass}">${scopeLabel}</span>
+                ${p.enabled === false ? `<span class="scope-badge">${pkgT('Archived', 'بایگانی‌شده')}</span>` : ''}
                 ${p.show_on_sub ? '<span class="scope-badge" style="background:rgba(34,197,94,0.18); color: var(--success); border:1px solid rgba(34,197,94,0.35);" title="Visible on customer subscription page">🌐 Sub</span>' : ''}
                 ${p.show_on_create === false ? '<span class="scope-badge" style="background:rgba(251,191,36,0.15); color:#fbbf24; border:1px solid rgba(251,191,36,0.35);" title="Hidden on creation surfaces">Renew only</span>' : ''}
                 ${p.show_on_renew === false ? '<span class="scope-badge" style="background:rgba(251,191,36,0.15); color:#fbbf24; border:1px solid rgba(251,191,36,0.35);" title="Hidden on renewal surfaces">Create only</span>' : ''}
@@ -618,9 +967,9 @@ function renderPackages(body) {
                 <button class="action-icon" title="Edit" data-onclick="startEditPackage(${p.id})">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                 </button>
-                <button class="action-icon danger" title="Delete" data-onclick="deletePackage(${p.id})">
+                ${p.enabled === false ? `<button type="button" class="btn btn-secondary" data-onclick="restorePackage(${p.id})">${pkgT('Restore', 'بازگردانی')}</button>` : `<button class="action-icon danger" title="${pkgT('Archive', 'بایگانی')}" data-onclick="deletePackage(${p.id})">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                </button>
+                </button>`}
             </div>
         </div>`;
     }).join('');
@@ -644,6 +993,12 @@ function openPkgModal(pkg) {
     document.getElementById('pkg-show-on-sub').checked = pkg ? !!pkg.show_on_sub : false;
     document.getElementById('pkg-show-on-create').checked = pkg ? (pkg.show_on_create !== false) : true;
     document.getElementById('pkg-show-on-renew').checked = pkg ? (pkg.show_on_renew !== false) : true;
+    for (const action of ['create', 'renew']) {
+        const allowed = pkg?.panel_roles?.[action] ?? (pkg?.scope === 'assigned' ? ['reseller'] : []);
+        for (const role of ['reseller', 'admin', 'superadmin']) {
+            document.getElementById(`pkg-role-${action}-${role}`).checked = allowed.includes(role);
+        }
+    }
     _cachedMinPrice = null;
     document.getElementById('pkg-price-hint').style.display = 'none';
     document.getElementById('pkg-price-warn').style.display = 'none';
@@ -676,6 +1031,7 @@ function toggleScopeFields() {
     const scope = document.getElementById('pkg-scope').value;
     const sec   = document.getElementById('pkg-assigned-section');
     sec.style.display = scope === 'assigned' ? '' : 'none';
+    document.getElementById('pkg-role-fields').classList.toggle('hidden', scope === 'global');
 }
 
 function renderResellerCheckboxes(selectedIds) {
@@ -762,6 +1118,9 @@ async function submitPackage() {
         reseller_discount_percent: document.getElementById('pkg-discount').value !== '' ? Number(document.getElementById('pkg-discount').value) : null,
         reseller_rounding: Number(document.getElementById('pkg-rounding').value || 0),
         scope,
+        panel_roles: scope === 'global' ? null : Object.fromEntries(['create', 'renew'].map(action => [
+            action, ['reseller', 'admin', 'superadmin'].filter(role => document.getElementById(`pkg-role-${action}-${role}`).checked),
+        ])),
         reseller_ids,
         assigned_reseller_ids: reseller_ids,
         show_on_sub: document.getElementById('pkg-show-on-sub').checked,
@@ -787,12 +1146,22 @@ async function submitPackage() {
 
 async function deletePackage(id) {
     const pkg = _pkgCache.find(p => p.id === id);
-    if (!pkg || !confirm(`Delete package "${pkg.name}"?`)) return;
+    if (!pkg || !confirm(pkgT(`Archive package "${pkg.name}"?`, `پکیج «${pkg.name}» بایگانی شود؟`))) return;
     try {
         const res = await packageFetch(`/admin/packages/${id}`, { method: 'DELETE' });
-        if (res.ok) { showToast('Package deleted'); await loadPackages(); }
+        if (res.ok) { showToast(pkgT('Package archived', 'پکیج بایگانی شد')); await loadPackages(); }
         else showToast('Error deleting package', 'error');
     } catch(e) { showToast('Error: ' + (e.message || 'Connection failed'), 'error'); }
+}
+
+async function restorePackage(id) {
+    try {
+        await pricingRequest(`/admin/packages/${id}`, 'PUT', {enabled:true});
+        showToast(pkgT('Package restored', 'پکیج بازگردانده شد'));
+        await loadPackages();
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
 }
 
 /* ─── Reseller Tab ─────────────────────────────────────────── */
@@ -817,7 +1186,7 @@ function loadResellerPackages() {
         return;
     }
 
-    body.innerHTML = _pkgCache.map(p => {
+    body.innerHTML = _pkgCache.filter(p => p.enabled).map(p => {
         const ids = p.assigned_reseller_ids || [];
         const isAssigned = (p.scope === 'global') || ids.includes(parseInt(resId));
         const scopeLabel = p.scope === 'global' ? 'Global' : (ids.includes(parseInt(resId)) ? 'Assigned' : 'Not assigned');
@@ -923,7 +1292,7 @@ function renderTiers(body) {
 
     body.innerHTML = `
     <div style="overflow-x:auto;">
-    <table class="tier-table">
+    <table class="tier-table pricing-tier-table">
         <thead>
             <tr>
                 <th>Name</th>
@@ -941,15 +1310,15 @@ function renderTiers(body) {
         <tbody>
         ${_tierCache.map(t => `
             <tr class="${t.is_active ? '' : 'tier-inactive'}">
-                <td>${escHtml(t.name)}${!t.is_active ? ' <span style="font-size:0.72rem;color:var(--text-secondary);">(off)</span>' : ''}</td>
-                <td>${fmtRange(t.min_volume_gb, t.max_volume_gb, 'GB')}</td>
-                <td>${fmtRange(t.min_days, t.max_days, 'd')}</td>
-                <td>${t.cost_per_gb != null ? Number(t.cost_per_gb).toLocaleString() : '—'}</td>
-                <td>${t.cost_per_day != null ? Number(t.cost_per_day).toLocaleString() : '—'}</td>
-                <td>${t.reseller_cost_per_gb != null ? Number(t.reseller_cost_per_gb).toLocaleString() : '—'}</td>
-                <td>${t.reseller_cost_per_day != null ? Number(t.reseller_cost_per_day).toLocaleString() : '—'}</td>
-                <td>${escHtml(tierResellerNames(t))}</td>
-                <td>${t.priority}</td>
+                <td data-label="${pkgT('Name', 'نام')}">${escHtml(t.name)}${!t.is_active ? ' <span style="font-size:0.72rem;color:var(--text-secondary);">(off)</span>' : ''}</td>
+                <td data-label="${pkgT('Volume', 'حجم')}">${fmtRange(t.min_volume_gb, t.max_volume_gb, 'GB')}</td>
+                <td data-label="${pkgT('Days', 'روز')}">${fmtRange(t.min_days, t.max_days, 'd')}</td>
+                <td data-label="${pkgT('Base/GB', 'پایه/گیگ')}">${t.cost_per_gb != null ? Number(t.cost_per_gb).toLocaleString() : '—'}</td>
+                <td data-label="${pkgT('Base/Day', 'پایه/روز')}">${t.cost_per_day != null ? Number(t.cost_per_day).toLocaleString() : '—'}</td>
+                <td data-label="${pkgT('Reseller Cost/GB', 'هزینه رسلر/گیگ')}">${t.reseller_cost_per_gb != null ? Number(t.reseller_cost_per_gb).toLocaleString() : '—'}</td>
+                <td data-label="${pkgT('Reseller Cost/Day', 'هزینه رسلر/روز')}">${t.reseller_cost_per_day != null ? Number(t.reseller_cost_per_day).toLocaleString() : '—'}</td>
+                <td data-label="${pkgT('Reseller', 'رسلر')}">${escHtml(tierResellerNames(t))}</td>
+                <td data-label="${pkgT('Priority', 'اولویت')}">${t.priority}</td>
                 <td style="white-space:nowrap;">
                     <button class="action-icon" title="Edit" data-onclick="startEditTier(${t.id})">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
@@ -964,7 +1333,8 @@ function renderTiers(body) {
     </div>`;
 }
 
-function openTierModal(tier) {
+async function openTierModal(tier) {
+    await loadPricingServers();
     _editTierId = tier ? tier.id : null;
     document.getElementById('tier-modal-title').textContent  = _editTierId ? 'Edit Price Tier' : 'Add Price Tier';
     document.getElementById('tier-submit-btn').textContent   = _editTierId ? 'Update Tier' : 'Create Tier';
@@ -978,6 +1348,11 @@ function openTierModal(tier) {
     document.getElementById('tier-reseller-cpg').value = tier?.reseller_cost_per_gb != null ? Number(tier.reseller_cost_per_gb).toLocaleString() : '';
     document.getElementById('tier-reseller-cpd').value = tier?.reseller_cost_per_day != null ? Number(tier.reseller_cost_per_day).toLocaleString() : '';
     document.getElementById('tier-priority').value  = tier ? tier.priority : 0;
+    const server = document.getElementById('tier-server');
+    if (tier?.server_id && ![...server.options].some(option => Number(option.value) === tier.server_id)) {
+        server.add(new Option('#' + tier.server_id, tier.server_id));
+    }
+    server.value = tier?.server_id ?? '';
     document.getElementById('tier-active').checked  = tier ? tier.is_active : true;
 
     // Populate reseller dropdown
@@ -1019,6 +1394,7 @@ async function submitTier() {
         reseller_cost_per_day: document.getElementById('tier-reseller-cpd').value !== '' ? unformatNumber(document.getElementById('tier-reseller-cpd').value) : null,
         assigned_reseller_ids: Array.from(document.getElementById('tier-reseller').selectedOptions || []).map(opt => parseInt(opt.value)),
         priority:      parseInt(document.getElementById('tier-priority').value) || 0,
+        server_id:     Number(document.getElementById('tier-server').value) || null,
         is_active:     document.getElementById('tier-active').checked,
     };
     try {

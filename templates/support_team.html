@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% macro tx(en, fa) %}{{ fa if support_fa else en }}{% endmacro %}
+{% macro permissions(enabled) %}
+<div class="support-fields">
+{% for key, labels in capability_labels.items() %}
+    <label class="checkbox-label"><input type="checkbox" name="permissions" value="{{ key }}" {{ 'checked' if key in enabled else '' }}><span class="checkmark"></span><span>{{ labels[1 if support_fa else 0] }}</span></label>
+{% endfor %}
+</div>
+{% endmacro %}
+{% macro operator_editor(profile, admin) %}
+<form class="support-form" data-team-action="operator">
+    {% if admin %}<input type="hidden" name="id" value="{{ admin.id }}">{% endif %}
+    <div class="support-fields">
+        <label class="form-group">{{ tx('Username','نام کاربری') }}<input name="username" required maxlength="100" value="{{ admin.username if admin else '' }}" autocomplete="off"></label>
+        <label class="form-group">{{ tx('Password · at least 12 characters','رمز عبور · حداقل ۱۲ نویسه') }}<input name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password"></label>
+        {% if is_superadmin and not admin %}
+        <label class="form-group">{{ tx('Existing admin ID · optional migration','شناسهٔ ادمین فعلی · انتقال اختیاری') }}<input name="legacy_id" type="number" min="1" max="2000000000"></label>
+        {% endif %}
+        <label class="form-group">{{ tx('Role template','الگوی نقش') }}
+            <select class="form-select" name="role_id"><option value="">{{ tx('Support defaults','پیش‌فرض پشتیبان') }}</option>
+                {% for row in roles %}<option value="{{ row.id }}" {{ 'selected' if profile and row.id == profile.role_id else '' }}>{{ row.name }}</option>{% endfor %}
+            </select>
+        </label>
+        <label class="form-group">{{ tx('Telegram numeric ID','شناسهٔ عددی تلگرام') }}<input name="telegram_id" inputmode="numeric" value="{{ admin.telegram_id or '' if admin else '' }}"></label>
+        <label class="form-group">{{ tx('Daily SMS limit','سقف پیامک روزانه') }}<input name="sms_limit" type="number" min="0" max="100000" required value="{{ profile.sms_limit if profile else 0 }}"></label>
+        <label class="form-group">{{ tx('Daily free operation limit','سقف عملیات رایگان روزانه') }}<input name="free_limit" type="number" min="0" max="1000" required value="{{ profile.free_limit if profile else 0 }}"></label>
+        <label class="form-group">{{ tx('Maximum GB per free operation','حداکثر گیگ هر عملیات رایگان') }}<input name="free_max_gb" type="number" min="0" max="10000" required value="{{ profile.free_max_gb if profile else 0 }}"></label>
+        <label class="checkbox-label"><input type="checkbox" name="enabled" {{ 'checked' if not admin or admin.enabled else '' }}><span class="checkmark"></span><span>{{ tx('Active operator','پشتیبان فعال') }}</span></label>
+    </div>
+    <fieldset class="support-fieldset">
+        <legend>{{ tx('Assigned locations','مقصدهای تخصیص‌یافته') }}</legend>
+        <div class="support-fields">
+        {% for sid, iid, server_name, remark in available %}
+            <label class="checkbox-label"><input type="checkbox" name="locations" value="{{ sid }}:{{ iid }}"
+                {{ 'checked' if profile and iid in profile.locations.get(sid|string, []) else '' }}><span class="checkmark"></span><span>{{ server_name or sid }} / {{ remark or iid }}</span></label>
+        {% else %}<p class="field-note">{{ tx('No locations in the current server snapshot.','در آخرین دادهٔ سرورها مقصدی وجود ندارد.') }}</p>
+        {% endfor %}
+        </div>
+    </fieldset>
+    <label class="form-group">{{ tx('Optional account scope · server ID:account UUID', 'محدودهٔ اختیاری حساب‌ها · شناسهٔ سرور:شناسهٔ حساب') }}
+        <textarea name="account_filter" rows="2" maxlength="16000">{% if profile %}{% for sid, ids in profile.account_filter.items() %}{% for uid in ids %}{{ sid }}:{{ uid }}&#10;{% endfor %}{% endfor %}{% endif %}</textarea>
+    </label>
+    <details class="support-disclosure">
+        <summary>{{ tx('Individual permissions','استثناهای دسترسی کاربر') }}</summary>
+        <div class="support-fields">
+        {% for key, labels in capability_labels.items() %}
+            {% set value = profile.overrides.get(key) if profile else none %}
+            <label class="form-group">{{ labels[1 if support_fa else 0] }}
+                <select class="form-select" name="permission-{{ key }}">
+                    <option value="">{{ tx('Inherit role','از نقش') }}</option>
+                    <option value="allow" {{ 'selected' if value is sameas true else '' }}>{{ tx('Allow','اجازه') }}</option>
+                    <option value="deny" {{ 'selected' if value is sameas false else '' }}>{{ tx('Deny','مسدود') }}</option>
+                </select>
+            </label>
+        {% endfor %}
+        </div>
+    </details>
+    <p class="field-note" data-permission-preview aria-live="polite"></p>
+    <button class="btn btn-primary" type="submit">{{ tx('Save operator','ذخیرهٔ پشتیبان') }}</button>
+</form>
+{% endmacro %}
+{% block page_title %}{{ tx('Support team','تیم پشتیبانی') }}{% endblock %}
+{% block content %}
+<div class="support-layout" data-support-root data-fa="{{ 1 if support_fa else 0 }}" data-owner="{{ selected_owner or 0 }}">
+    {% if is_superadmin %}
+    <section class="support-card">
+        <form method="get" class="support-actions">
+            <div class="form-group"><label for="support-owner">{{ tx('Employer','کارفرما') }}</label>
+                <select class="form-select" name="owner" id="support-owner">
+                    <option value="">{{ tx('System','سیستم') }}</option>
+                    {% for owner in owners %}<option value="{{ owner.id }}" {{ 'selected' if selected_owner == owner.id else '' }}>{{ owner.username }}</option>{% endfor %}
+                </select>
+            </div>
+            <button class="btn btn-secondary" type="submit">{{ tx('View team','نمایش تیم') }}</button>
+        </form>
+        <details class="support-disclosure">
+            <summary>{{ tx('Team policy and SMS limit','سیاست تیم و سقف پیامک') }}</summary>
+            <form class="support-form" data-team-action="policy">
+                {% if selected_owner %}{{ permissions(delegation) }}{% endif %}
+                <label class="form-group">{{ tx('Daily team SMS limit','سقف پیامک روزانهٔ تیم') }}<input name="sms_limit" type="number" min="0" max="100000" value="{{ sms_limit }}" required></label>
+                <button class="btn btn-primary" type="submit">{{ tx('Save policy','ذخیرهٔ سیاست') }}</button>
+            </form>
+        </details>
+        <details class="support-disclosure">
+            <summary>{{ tx('Reusable role templates','الگوهای نقش') }}</summary>
+            {% for row in roles + [none] %}
+            <form class="support-form support-disclosure" data-team-action="role">
+                {% if row %}<input type="hidden" name="id" value="{{ row.id }}">{% endif %}
+                <label class="form-group">{{ tx('Role name','نام نقش') }}<input name="name" maxlength="80" required value="{{ row.name if row else '' }}"></label>
+                {{ permissions(row.permissions if row else []) }}
+                <button class="btn btn-primary" type="submit">{{ tx('Save role','ذخیرهٔ نقش') }}</button>
+            </form>
+            {% endfor %}
+        </details>
+    </section>
+    {% endif %}
+    <section class="support-card">
+        <h2>{{ tx('Operators','پشتیبانان') }}</h2>
+        <details class="support-disclosure"><summary>{{ tx('Add operator','افزودن پشتیبان') }}</summary>{{ operator_editor(none, none) }}</details>
+        {% for profile, admin in contractors %}
+        <details class="support-disclosure">
+            <summary dir="auto">{{ admin.username }} · {{ tx('Active','فعال') if admin.enabled else tx('Disabled','غیرفعال') }}</summary>
+            <p class="field-note">{{ tx('This month','این ماه') }} · {{ tx('Answered','پاسخ') }} {{ metrics[admin.id].answered }} · {{ tx('Renewals','تمدید') }} {{ metrics[admin.id].renewals }} · {{ tx('Paid accounts','ساخت پولی') }} {{ metrics[admin.id].creations }} · {{ tx('Free accounts','ساخت رایگان') }} {{ metrics[admin.id].free }} · {{ tx('SMS','پیامک') }} {{ metrics[admin.id].sms }} · {{ metrics[admin.id].gb }} GB</p>
+            {{ operator_editor(profile, admin) }}
+            <details class="support-disclosure">
+                <summary>{{ tx('New compensation contract','قرارداد جدید دستمزد') }}</summary>
+                <form data-team-action="contract" data-record="{{ admin.id }}" class="support-form">
+                    <div class="support-fields">
+                        <label class="form-group">{{ tx('Commission method','روش پورسانت') }}<select class="form-select" name="mode">
+                            <option value="none">{{ tx('Salary / SMS only','حقوق ثابت / پیامک') }}</option>
+                            <option value="flat">{{ tx('Fixed per sale','مبلغ ثابت هر فروش') }}</option>
+                            <option value="percent">{{ tx('Percent of collected sales','درصد فروش وصول‌شده') }}</option>
+                            <option value="tiers">{{ tx('Monthly volume tiers','پلکان حجم ماهانه') }}</option>
+                        </select></label>
+                        {% for key, en, fa in [('salary','Monthly salary','حقوق ماهانه'), ('sms','Per delivered SMS','هر پیامک تحویل‌شده'), ('free','Free operation bonus','پاداش رایگان'), ('create','Paid account creation','ساخت پولی'), ('renew','Paid renewal','تمدید پولی'), ('percent','Sales percent','درصد فروش')] %}
+                        <label class="form-group" data-contract-field="{{ key }}">{{ tx(en, fa) }}
+                            <input name="{{ key }}" type="number" min="0" value="0" {{ 'step=0.01 max=100' if key == 'percent' else 'max=2000000000' }}>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <fieldset class="support-fieldset" data-contract-field="tiers">
+                        <legend>{{ tx('Monthly volume tiers','پلکان حجم ماهانه') }}</legend>
+                        <p class="field-note">{{ tx('Enter the cumulative GB cap and the amount per GB. Leave the final cap blank.', 'سقف تجمعی گیگ و مبلغ هر گیگ را وارد کنید. سقف پلهٔ آخر را خالی بگذارید.') }}</p>
+                        <div data-tier-rows class="support-list"></div>
+                        <button type="button" class="btn btn-secondary" data-add-tier>{{ tx('Add tier','افزودن پله') }}</button>
+                    </fieldset>
+                    <button type="submit" class="btn btn-primary">{{ tx('Save new version','ثبت نسخهٔ جدید قرارداد') }}</button>
+                </form>
+            </details>
+            <form data-team-action="payroll" data-record="{{ admin.id }}" class="support-actions">
+                <label class="form-group">{{ tx('Closed month','ماه پایان‌یافته') }}<input name="month" type="month" required></label>
+                <button class="btn btn-secondary" type="submit">{{ tx('Approve payroll','تأیید کارکرد ماه') }}</button>
+            </form>
+        </details>
+        {% endfor %}
+    </section>
+    <section class="support-card">
+        <h2>{{ tx('Correction requests','درخواست‌های اصلاح') }}</h2>
+        {% for row in corrections %}
+        <details id="support-activity-{{ row.id }}" class="support-disclosure">
+            <summary>#{{ row.id }} · {{ row.details.email }} · {{ row.created_at.strftime('%Y-%m-%d %H:%M') }}</summary>
+            <p class="support-message" dir="auto">{{ row.details.reason }}</p>
+            <form class="support-actions" data-team-action="resolve" data-record="{{ row.id }}">
+                <label class="form-group">{{ tx('Resolution note','نتیجهٔ بررسی') }}<input name="reason" required minlength="3" maxlength="1000"></label>
+                <button class="btn btn-primary" type="submit">{{ tx('Mark resolved','ثبت نتیجه') }}</button>
+            </form>
+        </details>
+        {% else %}<p class="field-note">{{ tx('No pending corrections.','درخواست اصلاح بازی وجود ندارد.') }}</p>{% endfor %}
+    </section>
+    <section class="support-card">
+        <h2>{{ tx('Recent activity','فعالیت‌های اخیر') }}</h2>
+        <form method="get" class="support-actions">
+            <input type="hidden" name="owner" value="{{ selected_owner or '' }}">
+            <label class="form-group">{{ tx('Exact account name','نام دقیق حساب') }}<input name="account" type="search" value="{{ account_query }}" maxlength="100"></label>
+            <button class="btn btn-secondary" type="submit">{{ tx('Filter activity','فیلتر فعالیت') }}</button>
+        </form>
+        {% for row in history %}
+        <details class="support-disclosure" id="support-activity-{{ row.id }}">
+            {% set labels = {'create':tx('Creation','ساخت'),'renew':tx('Renewal','تمدید'),'sms':tx('SMS','پیامک'),'reply':tx('Reply','پاسخ'),'correction':tx('Correction','اصلاح'),'adjustment':tx('Adjustment','تعدیل')} %}
+            <summary>#{{ row.id }} · {{ labels.get(row.kind, row.kind) }} · {{ row.details.email or '' }} · {{ row.created_at.strftime('%Y-%m-%d %H:%M') }}</summary>
+            <p class="field-note">{{ tx('Operator','پشتیبان') }} #{{ row.operator_id }} · {{ row.state }} · {{ row.reference }}</p>
+            {% if row.details.before or row.details.after %}
+            <dl class="support-fields"><div><dt>{{ tx('Before','قبل') }}</dt><dd>{{ row.details.before or '—' }}</dd></div>
+                <div><dt>{{ tx('After','بعد') }}</dt><dd>{{ row.details.after or '—' }}</dd></div></dl>
+            {% endif %}
+            {% if row.details.reason %}<p dir="auto">{{ row.details.reason }}</p>{% endif %}
+            {% if row.details.resolution %}<p dir="auto">{{ row.details.resolution }}</p>{% endif %}
+            {% if row.kind in ['create','renew','sms'] %}
+            <form class="support-form" data-team-action="review-amount" data-record="{{ row.id }}">
+                <div class="support-fields">
+                    <label class="form-group">{{ tx('Action','عملیات') }}<select class="form-select" name="action">
+                        {% if row.kind != 'sms' and not row.details.free %}<option value="payment">{{ tx('Confirm collected payment','تأیید مبلغ وصول‌شده') }}</option>{% endif %}
+                        <option value="adjustment">{{ tx('Adjust compensation','تعدیل دستمزد') }}</option>
+                    </select></label>
+                    <label class="form-group">{{ tx('Amount in toman','مبلغ به تومان') }}<input name="amount" type="number" min="-2000000000" max="2000000000" required></label>
+                    <label class="form-group">{{ tx('Reason or payment reference','دلیل یا مرجع پرداخت') }}<input name="reason" required minlength="3" maxlength="1000"></label>
+                </div>
+                <button class="btn btn-secondary" type="submit">{{ tx('Record','ثبت') }}</button>
+            </form>
+            {% endif %}
+        </details>
+        {% endfor %}
+    </section>
+    <section class="support-card">
+        <h2>{{ tx('Payroll and expenses','حقوق و هزینه‌ها') }}</h2>
+        <div class="support-list">
+        {% for row in settlements %}
+            <div class="support-item">
+                <strong>#{{ row.operator_id }} · {{ row.period.strftime('%Y-%m') }} · {{ '{:,}'.format(row.amount) }} {{ tx('T','تومان') }}</strong>
+                {% if row.paid_at %}<span class="badge">{{ tx('Paid','پرداخت‌شده') }}</span>
+                {% else %}
+                <form data-team-action="pay" data-record="{{ row.id }}">
+                    <button class="btn btn-secondary" type="submit">{{ tx('Record payment as expense','ثبت پرداخت به‌عنوان هزینه') }}</button>
+                </form>
+                {% endif %}
+            </div>
+        {% else %}<p class="field-note">{{ tx('No approved payroll yet.','هنوز دوره‌ای برای پرداخت تأیید نشده است.') }}</p>{% endfor %}
+        </div>
+    </section>
+    <p id="support-status" class="field-note support-live" role="status"></p>
+</div>
+<script type="application/json" nonce="{{ csp_nonce }}" id="support-role-data">{{ role_preview|tojson }}</script>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='support.js', v=app_version) }}" defer></script>{% endblock %}

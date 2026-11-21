@@ -7,7 +7,7 @@ from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
 
 from panel.extensions import db
-from panel.models import Admin, ClientOperation, Transaction
+from panel.models import Admin, ClientOperation, ResellerContract, Transaction, WalletLedger
 
 # ── operation states ─────────────────────────────────────────────────────────
 # A renewal is not one boolean. These states separate "the panel has the config"
@@ -46,7 +46,8 @@ def _dumps(payload) -> str:
 
 
 def begin_client_operation(*, idempotency_key, action, admin, server_id=None,
-                           inbound_id=None, client_email=None, amount=0, payload=None):
+                           inbound_id=None, client_email=None, amount=0, payload=None,
+                           quote=None):
     """Create/reserve once; return ``(operation, disposition, data)``.
 
     Disposition is ``new``, ``replay``, ``in_progress``, ``failed``,
@@ -78,7 +79,9 @@ def begin_client_operation(*, idempotency_key, action, admin, server_id=None,
         return existing, 'in_progress', {'error': 'Operation is already in progress'}
 
     operation_amount = max(0, int(amount or 0))
-    reserve_amount = operation_amount if admin.role == 'reseller' else 0
+    payer_id = quote.get('reseller_id') if quote is not None else (admin.id if admin.role == 'reseller' else None)
+    reserve_amount = operation_amount if payer_id else 0
+    quota_mib = quote.get('quota_mib', 0) if quote else 0
     operation = ClientOperation(
         idempotency_key=key,
         request_hash=request_hash,
@@ -89,6 +92,9 @@ def begin_client_operation(*, idempotency_key, action, admin, server_id=None,
         client_email=client_email,
         amount=operation_amount,
         credit_reserved=False,
+        billing_admin_id=payer_id,
+        quota_mib=quota_mib,
+        pricing_quote=quote,
         state='reserved',
     )
     db.session.add(operation)
@@ -101,7 +107,7 @@ def begin_client_operation(*, idempotency_key, action, admin, server_id=None,
                 else_=0,
             )
             updated = Admin.query.filter(
-                Admin.id == admin.id,
+                Admin.id == payer_id, Admin.role == 'reseller', Admin.enabled.is_(True),
                 (func.coalesce(Admin.credit, 0) - reserve_amount) >= minimum_balance,
             ).update(
                 {Admin.credit: func.coalesce(Admin.credit, 0) - reserve_amount},
@@ -111,6 +117,16 @@ def begin_client_operation(*, idempotency_key, action, admin, server_id=None,
                 db.session.rollback()
                 return None, 'insufficient_credit', {'error': 'Insufficient credit'}
             operation.credit_reserved = True
+        if quota_mib:
+            updated = ResellerContract.query.filter(
+                ResellerContract.reseller_id == payer_id,
+                ResellerContract.quota_mib >= quota_mib,
+            ).update({ResellerContract.quota_mib: ResellerContract.quota_mib - quota_mib},
+                     synchronize_session=False)
+            if updated != 1:
+                db.session.rollback()
+                return None, 'insufficient_credit', {'error': 'Insufficient reseller traffic quota'}
+            _quota_entry(operation, -quota_mib)
         db.session.commit()
         db.session.refresh(admin)
         return operation, 'new', {'remaining_credit': admin.credit}
@@ -120,6 +136,30 @@ def begin_client_operation(*, idempotency_key, action, admin, server_id=None,
         if existing and existing.request_hash == request_hash and existing.admin_id == admin.id:
             return existing, 'in_progress', {'error': 'Operation is already in progress'}
         return existing, 'conflict', {'error': 'Idempotency key conflict'}
+
+
+def _quota_entry(operation, amount):
+    db.session.add(WalletLedger(
+        account_type='reseller_quota', owner_id=operation.billing_admin_id,
+        amount=amount, type='quota_refund' if amount > 0 else 'quota_reservation',
+        idempotency_key=f'quota:{operation.id}:{"refund" if amount > 0 else "reserve"}',
+        reference_type='client_operation', reference_id=operation.id,
+    ))
+
+
+def _refund_operation(operation):
+    if operation.credit_reserved and operation.amount:
+        Admin.query.filter_by(id=operation.billing_admin_id or operation.admin_id).update(
+            {Admin.credit: func.coalesce(Admin.credit, 0) + operation.amount},
+            synchronize_session=False,
+        )
+    operation.credit_reserved = False
+    if operation.quota_mib:
+        ResellerContract.query.filter_by(reseller_id=operation.billing_admin_id).update(
+            {ResellerContract.quota_mib: ResellerContract.quota_mib + operation.quota_mib},
+            synchronize_session=False,
+        )
+        _quota_entry(operation, operation.quota_mib)
 
 
 def mark_client_operation_applied(operation, expected=None):
@@ -285,6 +325,8 @@ def complete_client_operation(operation, response, transaction=None, *, state=No
     if transaction is not None:
         db.session.flush()
         operation.transaction_id = transaction.id
+    from panel.services.support import report_client_operation
+    report_client_operation(operation, response)
     db.session.commit()
     return operation
 
@@ -296,18 +338,13 @@ def fail_client_operation(operation, error, response=None, *, uncertain=False):
     # Discard any uncommitted ownership/transaction work from the failed request,
     # then reload the durable reservation before deciding whether to refund it.
     db.session.rollback()
-    operation = db.session.get(ClientOperation, operation_id)
+    operation = ClientOperation.query.filter_by(id=operation_id).with_for_update().first()
     if not operation or operation.state in ('completed', 'failed'):
         return
     if uncertain or operation.state == 'panel_applied':
         operation.state = 'needs_reconciliation'
     else:
-        if operation.credit_reserved and operation.amount:
-            Admin.query.filter(Admin.id == operation.admin_id).update(
-                {Admin.credit: func.coalesce(Admin.credit, 0) + operation.amount},
-                synchronize_session=False,
-            )
-            operation.credit_reserved = False
+        _refund_operation(operation)
         operation.state = 'failed'
         operation.completed_at = datetime.utcnow()
     operation.error = str(error or '')[:2000]
@@ -345,34 +382,33 @@ def install_client_operation_response_guard(operation):
 def resolve_client_operation(operation_id, resolution, resolver_id):
     """Explicitly reconcile an ambiguous panel-applied operation."""
     db.session.rollback()
-    operation = db.session.get(ClientOperation, int(operation_id))
+    operation = ClientOperation.query.filter_by(id=int(operation_id)).with_for_update().first()
     if not operation:
         return None, 'Operation not found'
     if operation.state not in ('needs_reconciliation', 'panel_applied'):
         return None, f'Operation is already {operation.state}'
     resolution = str(resolution or '').strip().lower()
     if resolution == 'refund':
-        if operation.credit_reserved and operation.amount:
-            Admin.query.filter(Admin.id == operation.admin_id).update(
-                {Admin.credit: func.coalesce(Admin.credit, 0) + operation.amount},
-                synchronize_session=False,
-            )
-        operation.credit_reserved = False
+        _refund_operation(operation)
         operation.state = 'failed'
         operation.error = f'manually reconciled as not applied by admin#{resolver_id}'
         operation.completed_at = datetime.utcnow()
     elif resolution == 'complete':
         transaction = None
-        owner = db.session.get(Admin, operation.admin_id)
-        if operation.amount > 0 and not operation.transaction_id:
-            is_reseller = bool(owner and owner.role == 'reseller')
+        payer_id = operation.billing_admin_id or operation.admin_id
+        owner = db.session.get(Admin, payer_id)
+        if (operation.amount > 0 or operation.quota_mib) and not operation.transaction_id:
+            is_reseller = bool(operation.billing_admin_id or (owner and owner.role == 'reseller'))
             transaction = Transaction(
-                admin_id=operation.admin_id,
+                admin_id=payer_id,
                 server_id=operation.server_id,
                 client_email=operation.client_email,
                 amount=(-operation.amount if is_reseller else operation.amount),
                 type=operation.action[:20],
                 category=('usage' if is_reseller else 'income'),
+                package_name=(operation.pricing_quote or {}).get('package_name'),
+                volume_gb=(operation.pricing_quote or {}).get('volume_gb'),
+                days=(operation.pricing_quote or {}).get('days'),
                 description=(
                     f'Reconciled {operation.action} operation #{operation.id} '
                     f'by admin#{resolver_id}'
@@ -387,6 +423,8 @@ def resolve_client_operation(operation_id, resolution, resolver_id):
             'success': True, 'reconciled': True, 'operation_id': operation.id,
         })
         operation.completed_at = datetime.utcnow()
+        from panel.services.support import report_client_operation
+        report_client_operation(operation, operation_response(operation))
     else:
         return None, 'resolution must be complete or refund'
     db.session.commit()

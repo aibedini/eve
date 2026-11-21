@@ -1,0 +1,16 @@
+<details class="panel-card pricing-section pricing-guide">
+    <summary>{{ 'راهنمای قیمت‌گذاری' if panel_lang == 'fa' else 'Pricing guide' }}</summary>
+    {% if role == 'reseller' %}
+    <ol>
+        <li>{{ 'از یک پکیج مشترک استفاده کنید یا پکیج جدیدی با حجم و مدت دلخواه بسازید.' if panel_lang == 'fa' else 'Use a shared package or create a package with your own volume and duration.' }}</li>
+        <li>{{ 'در «قیمت فروش» مبلغی را تعیین کنید که مشتری می‌بیند. فیلد خالی قیمت اصلی پکیج را برمی‌گرداند.' if panel_lang == 'fa' else 'Set what the customer sees under Selling price. Clear the field to use the package price.' }}</li>
+        <li>{{ 'نمایش در سابسکریپشن را برای هر پکیج انتخاب کنید. هزینه شما از قرارداد می‌آید و ممکن است به تومان یا گیگ باشد.' if panel_lang == 'fa' else 'Choose which packages to publish on subscription pages. Your contract determines the cost, in Toman or GB.' }}</li>
+    </ol>
+    {% else %}
+    <ol>
+        <li>{{ 'پکیج‌های مشترک را با حجم، مدت و قیمت مرجع در «پکیج‌ها» تعریف کنید.' if panel_lang == 'fa' else 'Define shared packages with their volume, duration, and reference price under Packages.' }}</li>
+        <li>{{ 'در «قرارداد و کاتالوگ رسلر» روش تسویه، قیمت فروش و انتشار را مشخص کنید. تعرفه‌های بازه‌ای در تب تعرفه‌ها قرار دارند.' if panel_lang == 'fa' else 'Use Reseller Pricing to set billing, retail, and publication. Set rate ranges under Tariffs.' }}</li>
+        <li>{{ 'برای پکیج خصوصی، نقش‌های مجاز ساخت و تمدید دستی را جدا انتخاب کنید. سپس مبلغ و نمایش را با پیش‌نمایش بررسی کنید.' if panel_lang == 'fa' else 'For a private package, choose roles separately for panel creation and renewal. Check prices and visibility in the preview.' }}</li>
+    </ol>
+    {% endif %}
+</details>

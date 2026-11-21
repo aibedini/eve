@@ -15,7 +15,8 @@ from panel.core.finance_privacy import is_masked_value, mask_card_number
 from panel.extensions import db, limiter
 from panel.models import (
     Admin, BankCard, ClientOperation, ClientOwnership, CustomerAccount, CustomerTransaction,
-    ManualReceipt, Package, Payment, Server, Transaction, UsageDaily,
+    ManualReceipt, Package, Payment, ResellerContract, Server, TelegramPurchaseRequest,
+    TelegramServiceRequest, Transaction, UsageDaily, WalletLedger,
 )
 from panel.routes.common import login_required, permission_required, step_up_required
 
@@ -1148,7 +1149,10 @@ def get_finance_stats():
             Transaction.amount > 0,
             or_(Transaction.type.is_(None), func.upper(Transaction.type).notin_(excluded_types_upper))
         )
-        usage_query = Transaction.query.filter(Transaction.admin_id == user.id, Transaction.amount < 0)
+        usage_query = Transaction.query.filter(
+            Transaction.admin_id == user.id, Transaction.amount < 0,
+            or_(Transaction.type.is_(None), Transaction.type != 'reseller_support_payroll'),
+        )
         if card_id:
             charge_query = charge_query.filter(Transaction.card_id == card_id)
             usage_query = usage_query.filter(Transaction.card_id == card_id)
@@ -1297,7 +1301,10 @@ def get_finance_stats():
             )
 
         # For net profit: get expense transactions separately
-        expense_query = Transaction.query.filter(Transaction.category == 'expense')
+        expense_query = Transaction.query.filter(
+            Transaction.category == 'expense',
+            or_(Transaction.type.is_(None), Transaction.type != 'reseller_support_payroll'),
+        )
         if target_user_id:
             expense_query = expense_query.filter(Transaction.admin_id == target_user_id)
         if card_id:
@@ -1569,6 +1576,11 @@ def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
     if end_dt:
         q = q.filter(Transaction.created_at <= end_dt)
     rows = q.order_by(Transaction.created_at.desc()).all()
+    quota_transactions = {
+        row[0] for row in db.session.query(ClientOperation.transaction_id)
+        .join(Transaction, Transaction.id == ClientOperation.transaction_id)
+        .filter(q.whereclause, ClientOperation.quota_mib > 0)
+    }
 
     resolve = _statement_plan_resolver()
 
@@ -1581,6 +1593,7 @@ def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
     by_package = {}
     by_server = {}
     out_rows = []
+    support_expenses = 0
 
     for r in rows:
         amt = int(r.amount or 0)
@@ -1589,13 +1602,15 @@ def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
         row_d['pkg'] = None
         row_d['is_gift'] = False
         row_d['charge'] = 0
+        if t == 'reseller_support_payroll':
+            support_expenses += max(0, -amt)
         if t in _STATEMENT_SPEND_TYPES:
             charge = -amt if amt < 0 else 0  # reseller credit usage is stored negative
             spent += charge
             row_d['charge'] = charge
             pname = r.package_name or _statement_pkg_from_desc(r.description)
             eff_vol, eff_days = resolve(r, pname)
-            is_gift = (amt == 0) or ('(Free)' in (r.description or ''))
+            is_gift = (amt == 0 and r.id not in quota_transactions) or ('(Free)' in (r.description or ''))
             charged_gb += eff_vol
             if not is_gift and eff_vol > 0:
                 paid_volume_gb += eff_vol
@@ -1676,6 +1691,29 @@ def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
     if end_dt:
         payments = payments.filter(Payment.payment_date <= end_dt)
     customer_revenue = int(payments.scalar() or 0)
+    telegram_sales = 0
+    for order in (TelegramPurchaseRequest, TelegramServiceRequest):
+        sales = db.session.query(func.coalesce(func.sum(order.amount), 0)).filter(
+            order.status == 'completed', order.pricing_quote['reseller_id'].as_integer() == target.id,
+        )
+        if order is TelegramServiceRequest:
+            sales = sales.filter(order.request_type == 'renewal')
+        completed_at = func.coalesce(order.reviewed_at, order.updated_at)
+        if start_dt:
+            sales = sales.filter(completed_at >= start_dt)
+        if end_dt:
+            sales = sales.filter(completed_at <= end_dt)
+        telegram_sales += int(sales.scalar() or 0)
+    contract = db.session.get(ResellerContract, target.id)
+    if contract and contract.policy.get('mode') != 'legacy':
+        pricing_mode = contract.policy['mode']
+    quota_query = db.session.query(WalletLedger.type, func.sum(WalletLedger.amount)).filter_by(
+        account_type='reseller_quota', owner_id=target.id)
+    if start_dt:
+        quota_query = quota_query.filter(WalletLedger.created_at >= start_dt)
+    if end_dt:
+        quota_query = quota_query.filter(WalletLedger.created_at <= end_dt)
+    quota_totals = dict(quota_query.group_by(WalletLedger.type).all())
 
     balance = deposited - spent  # negative => under-deposited (debt)
     summary = {
@@ -1684,7 +1722,17 @@ def _compute_reseller_statement(target, start_dt, end_dt, pct=None):
         'created': created, 'renewed': renewed, 'reset': reset_cnt,
         'spent': spent, 'deposited': deposited,
         'customer_revenue': customer_revenue,
-        'profit': customer_revenue - spent,
+        'profit': customer_revenue - spent - support_expenses,
+        'support_expenses': support_expenses,
+        'wholesale_charges': spent,
+        'telegram_sales': telegram_sales,
+        'quota': {
+            'granted_gb': (quota_totals.get('quota_grant', 0) or 0) / 1024,
+            'allocated_gb': (-(quota_totals.get('quota_reservation', 0) or 0)
+                             - (quota_totals.get('quota_refund', 0) or 0)) / 1024,
+            'available_gb': (contract.quota_mib if contract else 0) / 1024,
+            'active': bool(contract and contract.policy.get('mode') == 'quota'),
+        },
         'should_deposit': spent, 'balance': balance,
         'row_count': len(rows),
         'start_jalali': format_jalali(start_dt) if start_dt else None,
@@ -1890,6 +1938,11 @@ def reseller_statement_export():
     ws.append(['Paid to system (T)', s['deposited']])
     ws.append(['Customer revenue (T)', s['customer_revenue']])
     ws.append(['Reseller profit (T)', s['profit']])
+    ws.append(['Support payroll expenses (T)', s['support_expenses']])
+    ws.append(['Completed Telegram sales (T)', s['telegram_sales']])
+    ws.append(['Traffic quota granted (GB)', s['quota']['granted_gb']])
+    ws.append(['Net traffic quota debited (GB)', s['quota']['allocated_gb']])
+    ws.append(['Traffic quota available now (GB)', s['quota']['available_gb']])
     ws.append(['Balance (T)', s['balance']])
     if not traffic.get('usage_available', True):
         note = 'No usage snapshots in this period — Used/Remaining GB and Usage cost are understated.'

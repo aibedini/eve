@@ -1044,7 +1044,17 @@
                 <div class="stmt-card stmt-spend"><span class="stmt-k">{{ _('Reseller cost') }}</span><span class="stmt-v" id="stmt-spent">0 T</span></div>
                 <div class="stmt-card stmt-paid"><span class="stmt-k">{{ _('Paid to system') }}</span><span class="stmt-v" id="stmt-deposited">0 T</span></div>
                 <div class="stmt-card"><span class="stmt-k">{{ _('Customer revenue') }}</span><span class="stmt-v" id="stmt-customer-revenue">0 T</span></div>
+                <div class="stmt-card hidden" id="stmt-telegram-sales-card">
+                    <span class="stmt-k">{{ 'فروش تکمیل‌شده تلگرام' if panel_lang == 'fa' else 'Completed Telegram sales' }}</span>
+                    <span class="stmt-v" id="stmt-telegram-sales"></span>
+                </div>
                 <div class="stmt-card"><span class="stmt-k">{{ _('Reseller profit') }}</span><span class="stmt-v" id="stmt-profit">0 T</span></div>
+                <div class="stmt-card"><span class="stmt-k">{{ 'هزینهٔ پشتیبانی' if panel_lang == 'fa' else 'Support payroll' }}</span><span class="stmt-v" id="stmt-support-payroll">0 T</span></div>
+                <div class="stmt-card hidden" id="stmt-quota-card">
+                    <span class="stmt-k">{{ 'سهمیه حجمی رسلر' if panel_lang == 'fa' else 'Reseller traffic quota' }}</span>
+                    <span class="stmt-v" id="stmt-quota-balance"></span>
+                    <span class="field-note" id="stmt-quota-period"></span>
+                </div>
                 <div class="stmt-card" id="stmt-balance-card"><span class="stmt-k">{{ _('Balance') }}</span><span class="stmt-v" id="stmt-balance">0 T</span></div>
                 <div class="stmt-card" id="stmt-percent-card" style="display:none;"><span class="stmt-k" id="stmt-percent-k">{{ _('Debt') }}</span><span class="stmt-v" id="stmt-percent-debt">0 T</span></div>
             </div>
@@ -2607,7 +2617,17 @@
             $('stmt-spent').textContent = money(s.spent);
             $('stmt-deposited').textContent = money(s.deposited);
             $('stmt-customer-revenue').textContent = money(s.customer_revenue);
+            $('stmt-telegram-sales-card').classList.toggle('hidden', !s.telegram_sales);
+            $('stmt-telegram-sales').textContent = money(s.telegram_sales);
             $('stmt-profit').textContent = money(s.profit);
+            $('stmt-support-payroll').textContent = money(s.support_expenses);
+            const quota = s.quota || {};
+            $('stmt-quota-card').classList.toggle('hidden', !quota.active && !quota.granted_gb && !quota.allocated_gb);
+            $('stmt-quota-balance').textContent = Number(quota.available_gb || 0).toLocaleString() + ' GB';
+            $('stmt-quota-period').textContent =
+                {{ ('افزوده‌شده / کسرشده در بازه' if panel_lang == 'fa' else 'Granted / debited in period')|tojson }} +
+                ' · ' + Number(quota.granted_gb || 0).toLocaleString() + ' / ' +
+                Number(quota.allocated_gb || 0).toLocaleString() + ' GB';
             $('stmt-balance').textContent = (s.balance < 0 ? '-' : '') + money(Math.abs(s.balance));
             const balCard = $('stmt-balance-card');
             balCard.classList.remove('stmt-debt', 'stmt-ok');

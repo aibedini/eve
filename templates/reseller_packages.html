@@ -4,6 +4,7 @@
 
 {% block content %}
 <div class="settings-content">
+    {% include "partials/pricing_guide.html" %}
     <div class="panel-card">
         <div class="panel-card-header">
             <div class="header-content">
@@ -15,8 +16,30 @@
                 New Package
             </button>
         </div>
+        <p id="my-pricing-balance" class="pricing-section field-note hidden" role="status"></p>
         <div id="my-pkg-container" style="padding: 0 20px 20px;">
             <div class="loading-state">Loading packages…</div>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay hidden" id="my-retail-modal">
+    <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="my-retail-title">
+        <div class="modal-header">
+            <h2 id="my-retail-title">{{ 'قیمت فروش پکیج' if panel_lang == 'fa' else 'Package selling price' }}</h2>
+            <button type="button" class="modal-close" aria-label="{{ 'بستن' if panel_lang == 'fa' else 'Close' }}" data-onclick="closeMyRetail()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="my-retail-price">{{ 'قیمت مشتری (تومان)' if panel_lang == 'fa' else 'Customer price (Toman)' }}</label>
+                <input id="my-retail-price" type="number" min="0" step="1" aria-describedby="my-retail-hint">
+                <small class="field-note" id="my-retail-hint">{{ 'خالی بگذارید تا قیمت اصلی پکیج استفاده شود.' if panel_lang == 'fa' else 'Leave blank to inherit the package price.' }}</small>
+            </div>
+            <p id="my-retail-status" class="field-note field-note-warn" role="status"></p>
+            <div class="form-actions">
+                <button class="btn btn-secondary" type="button" data-onclick="closeMyRetail()">{{ 'انصراف' if panel_lang == 'fa' else 'Cancel' }}</button>
+                <button class="btn btn-primary" type="button" data-onclick="saveMyRetail(this)">{{ 'ذخیره' if panel_lang == 'fa' else 'Save' }}</button>
+            </div>
         </div>
     </div>
 </div>
@@ -45,11 +68,11 @@
                 </div>
             </div>
             <div class="form-group">
-                <label>Price (Toman)</label>
+                <label for="my-pkg-price">{{ 'قیمت فروش مشتری (تومان)' if panel_lang == 'fa' else 'Customer selling price (Toman)' }}</label>
                 <input type="text" id="my-pkg-price" class="form-input" placeholder="150,000" inputmode="numeric" data-oninput="formatNum(this); checkMyPriceWarn()">
                 <div id="my-pkg-price-hint" style="margin-top:6px; font-size:0.82rem; color:var(--text-secondary); display:none;"></div>
                 <div id="my-pkg-price-warn" class="alert alert-warning" style="margin-top:6px; display:none; padding:8px 12px; font-size:0.84rem; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.3); border-radius:8px; color:#fbbf24;">
-                    {{ '⚠️ قیمت پایین‌تر از حداقل تعرفه سیستم است و ذخیره نمی‌شود.' if panel_lang == 'fa' else '⚠️ The price is below the system minimum and cannot be saved.' }}
+                    {{ 'قیمت فروش پایین‌تر از تعرفه مرجع سیستم است.' if panel_lang == 'fa' else 'The selling price is below the system reference tariff.' }}
                 </div>
             </div>
             <label class="form-group form-toggle-item" style="cursor:pointer; margin-top:4px;">
@@ -152,6 +175,10 @@
             const data = await res.json();
             if (!data.success) { c.innerHTML = '<div class="empty-state">' + escHtml(data.error || 'Failed to load') + '</div>'; return; }
             _myPkgs = data.items || [];
+            const balance = document.getElementById('my-pricing-balance');
+            balance.classList.toggle('hidden', data.contract_mode !== 'quota');
+            balance.textContent = myPkgT('Available traffic quota', 'سهمیه حجمی قابل استفاده') +
+                ' · ' + (Number(data.quota_mib) / 1024).toLocaleString() + ' GB';
             renderMyPackages();
         } catch (e) { c.innerHTML = '<div class="empty-state">Network error</div>'; }
     }
@@ -184,8 +211,11 @@
                 <div class="pkg-meta">
                     ${ownBadge}
                     ${subBadge}
-                    <div class="pkg-price">${Number(p.price).toLocaleString()} T</div>
-                    <span class="field-note">${myPkgT('Your cost', 'هزینه شما')}: ${Number(p.reseller_cost).toLocaleString()} T</span>
+                    <div class="pkg-price">${myPkgT('Customer pays', 'قیمت مشتری')} · ${Number(p.price).toLocaleString()} T</div>
+                    <span class="field-note">${myPkgT('Your cost', 'هزینه شما')} · ${p.quota_mib ?
+                        (p.quota_mib / 1024).toLocaleString() + ' GB' : p.reseller_cost == null ?
+                        myPkgT('Unavailable', 'در دسترس نیست') : Number(p.reseller_cost).toLocaleString() + ' T'}</span>
+                    <button type="button" class="btn btn-secondary" data-onclick="openMyRetail(${p.id})">${myPkgT('Selling price', 'قیمت فروش')}</button>
                     <label class="sub-toggle" title="${myPkgT('Show on customer subscription page', 'نمایش در صفحه اشتراک مشتری')}">
                         <div class="toggle-switch">
                             <input type="checkbox" ${p.sub_shown ? 'checked' : ''} data-onchange="toggleSub(${p.id}, this.checked, this)">
@@ -216,6 +246,62 @@
         } catch (e) {
             showToast('Network error', 'error');
             el.checked = !checked;
+        }
+    }
+
+    let editedRetail = null;
+    let retailTrigger = null;
+    function openMyRetail(id) {
+        const pkg = _myPkgs.find(row => row.id === id);
+        if (!pkg) return;
+        editedRetail = id;
+        retailTrigger = document.activeElement;
+        const input = document.getElementById('my-retail-price');
+        input.value = pkg.selling_price_override ?? '';
+        input.placeholder = pkg.base_price;
+        document.getElementById('my-retail-status').textContent = '';
+        document.getElementById('my-retail-modal').classList.remove('hidden');
+        input.focus();
+    }
+
+    function closeMyRetail() {
+        editedRetail = null;
+        document.getElementById('my-retail-modal').classList.add('hidden');
+        retailTrigger?.focus();
+    }
+
+    document.getElementById('my-retail-modal').addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeMyRetail();
+        if (event.key !== 'Tab') return;
+        const focusable = [...event.currentTarget.querySelectorAll('button:not(:disabled), input:not(:disabled)')];
+        const first = focusable[0], last = focusable.at(-1);
+        if (event.shiftKey && document.activeElement === first || !event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            (event.shiftKey ? last : first)?.focus();
+        }
+    });
+
+    async function saveMyRetail(button) {
+        if (editedRetail == null) return;
+        const id = editedRetail;
+        const status = document.getElementById('my-retail-status');
+        const input = document.getElementById('my-retail-price');
+        if (!input.reportValidity()) return;
+        button.disabled = true;
+        try {
+            const res = await fetch(`/api/my-packages/${id}/offer`, {
+                method: 'PUT', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({selling_price: input.value}),
+            });
+            const result = await res.json();
+            if (!res.ok || !result.success) throw new Error(result.error || myPkgT('Could not save', 'ذخیره ناموفق بود'));
+            closeMyRetail();
+            await loadMyPackages();
+            showToast(myPkgT('Selling price saved', 'قیمت فروش ذخیره شد'));
+        } catch (error) {
+            status.textContent = error.message;
+        } finally {
+            button.disabled = false;
         }
     }
 
@@ -252,12 +338,12 @@
         const hint = document.getElementById('my-pkg-price-hint');
         if (!vol || !days) { hint.style.display = 'none'; _myMinPrice = null; checkMyPriceWarn(); return; }
         try {
-            const res = await fetch(`/api/packages/min-price?volume_gb=${vol}&days=${days}`);
+            const res = await fetch(`/api/packages/min-price?basis=system&volume_gb=${vol}&days=${days}`);
             const data = await res.json();
             if (data.success) {
                 _myMinPrice = data.min_price;
                 hint.style.display = '';
-                hint.textContent = myPkgT(`Minimum system price: ${Number(data.min_price).toLocaleString()} Toman`, `حداقل قیمت (تعرفه سیستم): ${Number(data.min_price).toLocaleString()} تومان`);
+                hint.textContent = myPkgT(`System reference: ${Number(data.min_price).toLocaleString()} Toman`, `تعرفه مرجع سیستم: ${Number(data.min_price).toLocaleString()} تومان`);
                 checkMyPriceWarn();
             }
         } catch (e) {}
@@ -275,10 +361,6 @@
         const volume = unNum(document.getElementById('my-pkg-vol').value);
         const price = unNum(document.getElementById('my-pkg-price').value);
         if (!name || !price) { showToast(myPkgT('Name and price are required', 'نام و قیمت الزامی است'), 'error'); return; }
-        if (_myMinPrice && days && volume && price < _myMinPrice) {
-            showToast(myPkgT(`Price cannot be below ${Number(_myMinPrice).toLocaleString()} Toman`, `قیمت نباید کمتر از ${Number(_myMinPrice).toLocaleString()} تومان باشد`), 'error');
-            return;
-        }
         const body = { name, days, volume, price, show_on_sub: document.getElementById('my-pkg-show-on-sub').checked,
             show_on_create: document.getElementById('my-pkg-show-on-create').checked,
             show_on_renew: document.getElementById('my-pkg-show-on-renew').checked };

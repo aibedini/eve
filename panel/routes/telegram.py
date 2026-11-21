@@ -159,6 +159,11 @@ def _disable_telegram_backup_egress_profile():
 def _telegram_service_visible_to(admin, row):
     if not admin:
         return False
+    if admin.role == 'support':
+        from panel.services.support import can_access_request
+        if row.request_type in ('support', 'renewal'):
+            return can_access_request(admin, row, 'telegram_reply' if row.request_type == 'support' else 'telegram_review')
+        return False
     if admin.is_superadmin or str(admin.role or '').lower() in ('admin', 'superadmin'):
         return True
     return (str(admin.role or '').lower() == 'reseller' and row.ownership
@@ -222,13 +227,17 @@ def _serialize_telegram_purchase(row, identity_map=None, customer_map=None):
 
 
 def _support_assignable_operators(row, admins=None):
+    from panel.services.support import capabilities_for, can_access_service, profile_for
+
     admins = admins if admins is not None else Admin.query.filter_by(enabled=True).all()
     reseller_id = getattr(row.ownership, 'reseller_id', None) if row.ownership else None
     result = []
     for admin in admins:
         role = str(admin.role or '').lower()
+        profile = profile_for(admin)
         if not (admin.is_superadmin or role in ('admin', 'superadmin')
-                or (role == 'reseller' and admin.id == reseller_id)):
+                or (role == 'reseller' and admin.id == reseller_id)
+                or ('telegram_reply' in capabilities_for(profile) and can_access_service(profile, row.ownership))):
             continue
         result.append({
             'id': admin.id,
@@ -867,16 +876,19 @@ def reply_telegram_support_operation(request_id):
             attachment_values['source_chat_id'] = int(identity.telegram_chat_id)
         elif not _telegram_operation_notify(row, reply=message):
             return jsonify({'success': False, 'error': 'Telegram delivery failed; reply was not saved'}), 502
-        db.session.add(TelegramServiceRequestMessage(
+        message_row = TelegramServiceRequestMessage(
             request_id=row.id, sender_type='admin', admin_id=admin.id,
             message=message, **attachment_values,
-        ))
+        )
+        db.session.add(message_row)
+        from panel.services.support import record_telegram_reply
         if not row.assigned_admin_id:
             row.assigned_admin_id = admin.id
         if not row.first_response_at:
             row.first_response_at = datetime.utcnow()
         row.updated_at = datetime.utcnow()
         complete = str(data.get('complete') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+        record_telegram_reply(admin, row, message_row, closed=complete)
         if complete:
             row.status = 'completed'
             row.reviewed_by_admin_id = admin.id

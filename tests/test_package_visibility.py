@@ -155,14 +155,14 @@ class PackageVisibilityTests(unittest.TestCase):
 
     # ── customer subscription page packages ─────────────────────────────
 
-    def test_sub_page_packages_skips_hidden_renew(self):
+    def test_sub_page_publication_is_independent_of_panel_renewal(self):
         self._package('normal', scope='global', show_on_sub=True)
         self._package('create-only', scope='global', show_on_sub=True,
                       show_on_renew=False)
         db.session.commit()
         names = {p['name'] for p in _build_sub_page_packages(None)}
         self.assertIn('normal', names)
-        self.assertNotIn('create-only', names)
+        self.assertIn('create-only', names)
 
     def test_reseller_without_override_inherits_published_allowed_packages(self):
         reseller = Admin(
@@ -190,7 +190,7 @@ class PackageVisibilityTests(unittest.TestCase):
         db.session.commit()
 
         names = {p['name'] for p in _build_sub_page_packages(reseller)}
-        self.assertEqual({'published-global', 'published-assigned'}, names)
+        self.assertEqual({'published-global', 'published-assigned', 'create-only'}, names)
 
     def test_reseller_override_replaces_inherited_package_selection(self):
         reseller = Admin(

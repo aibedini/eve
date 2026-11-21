@@ -27,7 +27,7 @@ from panel.services import lifecycle as lifecycle_service
 from panel.services import subscription_ended
 from panel.services.backup import _parse_int
 from panel.services.billing import (
-    _build_sub_page_packages, _build_subscription_package_recommendation,
+    _build_sub_page_packages, _build_subscription_package_recommendation, pricing_owner,
 )
 from panel.services.subscription import (
     DEFAULT_SUBSCRIPTION_STATISTICS_TEMPLATE_EN,
@@ -921,14 +921,8 @@ def client_subscription(server_id, sub_id):
     try:
         cu = (target_client.get('id') or '').strip() if isinstance(target_client, dict) else ''
         email_l = (client_email or '').strip().lower()
-        ownership = ClientOwnership.query.filter(
-            ClientOwnership.server_id == int(server.id),
-            or_(
-                ClientOwnership.client_uuid == cu,
-                func.lower(ClientOwnership.client_email) == email_l,
-            )
-        ).first()
-        reseller = ownership.reseller if ownership else None
+        reseller_id = pricing_owner(server.id, cu, email_l)
+        reseller = db.session.get(Admin, reseller_id) if reseller_id else None
         if reseller and getattr(reseller, 'role', None) == 'reseller':
             sub_owner_reseller = reseller
             def _clean_telegram_username(v: str | None) -> str:

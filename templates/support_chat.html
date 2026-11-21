@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% macro tx(en, fa) %}{{ fa if support_fa else en }}{% endmacro %}
+{% block page_title %}{{ tx('Portal chat', 'چت پورتال') }}{% endblock %}
+{% block content %}
+<section class="support-card support-layout" data-support-root data-fa="{{ 1 if support_fa else 0 }}">
+    <a class="btn btn-secondary" href="{{ url_for('support.workspace') }}">{{ tx('Workspace','میز کار') }}</a>
+    <h2 dir="auto">{{ service.client_email_snapshot }}</h2>
+    <div class="support-list" role="log" aria-live="polite" data-chat-messages></div>
+    <form class="support-form" data-chat-url="{{ url_for('support.operator_chat', service_id=service.id) }}">
+        <label class="form-group">{{ tx('Reply','پاسخ') }}<textarea name="message" rows="3" maxlength="4000" required></textarea></label>
+        <label class="checkbox-label"><input type="checkbox" name="complete"><span class="checkmark"></span><span>{{ tx('Resolve after sending','بستن گفتگو پس از ارسال') }}</span></label>
+        <button class="btn btn-primary" type="submit">{{ tx('Send','ارسال') }}</button>
+    </form>
+    <p id="support-status" class="field-note" role="status"></p>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='support.js', v=app_version) }}" defer></script>{% endblock %}

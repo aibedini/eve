@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.23.16"
+APP_VERSION = "2.23.17"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -3121,6 +3121,7 @@ from panel.routes.files import bp as files_bp
 from panel.routes.messaging import bp as messaging_bp
 from panel.routes.sms_gateway_events import bp as sms_gateway_events_bp
 from panel.routes.settings import bp as settings_bp
+from panel.routes.support import bp as support_bp, restrict_support_session
 from panel.routes.templates_api import bp as templates_api_bp
 
 app.register_blueprint(auth_bp)
@@ -3143,6 +3144,8 @@ app.register_blueprint(custom_subs_bp)
 app.register_blueprint(subscription_pages_bp)
 app.register_blueprint(telegram_bp)
 app.register_blueprint(settings_bp)
+app.register_blueprint(support_bp)
+app.before_request(restrict_support_session)
 app.register_blueprint(content_bp)
 app.register_blueprint(files_bp)
 app.register_blueprint(messaging_bp)
@@ -4306,30 +4309,17 @@ def _telegram_purchase_routes_payload(bot: TelegramBotInstance):
 
 
 def _telegram_purchase_packages_payload(bot: TelegramBotInstance = None):
-    # Mirrors telegram_bot_worker._purchase_packages / _resolve_purchase_price;
-    # app.py cannot import the worker (the worker already imports app).
+    from panel.services.billing import catalog_offer, customer_package_price, customer_package_visible
     owner_id = int(bot.owner_admin_id) if bot and bot.owner_admin_id else None
     packages = Package.query.filter_by(enabled=True).order_by(
         Package.display_order.asc(), Package.id.asc(),
     ).all()
     rows = []
     for package in packages:
-        if getattr(package, 'is_trial', False):
+        offer = catalog_offer(package, owner_id)
+        if not customer_package_visible(package, owner_id, 'purchase', offer=offer):
             continue
-        if not getattr(package, 'show_on_create', True):
-            continue
-        scope = str(package.scope or 'global').lower()
-        if scope != 'global':
-            try:
-                assigned = {int(value) for value in json.loads(package.assigned_reseller_ids or '[]')}
-            except (TypeError, ValueError):
-                assigned = set()
-            if not owner_id or (
-                owner_id not in assigned and
-                not (scope == 'personal' and int(package.created_by or 0) == owner_id)
-            ):
-                continue
-        price = int(package.price or 0)
+        price = customer_package_price(package, owner_id, offer)
         rows.append({
             'id': package.id,
             'name': package.name,

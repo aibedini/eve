@@ -152,6 +152,7 @@
                 </svg>
                 {{ user.mobile }}
             </span>
+            <a href="{{ url_for('support.portal_support') }}" class="btn-logout">{{ 'پشتیبانی' if panel_lang == 'fa' else 'Support' }}</a>
             <a href="{{ url_for('auth.client_logout') }}" class="btn-logout">{{ 'خروج' if panel_lang == 'fa' else 'Log out' }}</a>
         </div>
     </nav>

@@ -125,6 +125,93 @@
     .renew-progress-mark.is-loading { animation: none; border-style: dashed; }
 }
 
+.support-layout, .support-list, .support-form {
+    display: grid;
+    gap: 12px;
+    min-inline-size: 0;
+}
+
+.support-layout { gap: 16px; }
+.support-portal { max-inline-size: 760px; margin-inline: auto; padding: 16px; }
+.support-layout > .btn, .support-form > .btn { justify-self: start; }
+.support-card {
+    display: grid;
+    gap: 12px;
+    align-content: start;
+    min-inline-size: 0;
+    padding: 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+}
+.support-card h2 { font-size: 1rem; margin: 0; }
+.support-columns, .support-fields, .support-metrics {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+.support-columns { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 16px; }
+.support-actions, .support-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 8px;
+}
+.support-heading { justify-content: space-between; align-items: center; }
+.support-actions .form-group { flex: 1 1 150px; }
+.support-layout .form-group { min-inline-size: 0; margin: 0; }
+.support-layout .form-select, .support-layout .form-group input, .support-layout textarea {
+    min-block-size: 44px;
+    max-inline-size: 100%;
+}
+.support-layout .btn, .support-layout summary, .support-layout .checkbox-label {
+    min-block-size: 44px;
+    white-space: normal;
+}
+.support-layout .btn { text-align: center; }
+.support-layout summary {
+    cursor: pointer;
+    align-content: center;
+    overflow-wrap: anywhere;
+}
+.support-disclosure { border-block-start: 1px solid var(--border-color); padding-block-start: 8px; }
+.support-disclosure > :not(summary) { margin-block: 8px; }
+.support-fieldset {
+    min-inline-size: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+}
+.support-fieldset legend { padding-inline: 8px; }
+.support-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+    overflow-wrap: anywhere;
+    color: var(--text-primary);
+}
+.support-item > .support-actions { inline-size: 100%; }
+.support-item > .support-message { flex-basis: 100%; }
+.support-message { white-space: pre-wrap; overflow-wrap: anywhere; }
+.support-metric { display: grid; gap: 6px; min-inline-size: 0; }
+.support-metric strong, .support-metric dd { font-size: 1.25rem; font-weight: 600; margin: 0; }
+.support-metric small { color: var(--text-secondary); }
+.support-live:not(:empty) {
+    position: sticky;
+    inset-block-end: 8px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-card);
+}
+@media (max-width: 768px) {
+    .support-columns { grid-template-columns: minmax(0, 1fr); }
+}
+
 :root {
     --primary: #6366f1;
     --primary-dark: #4f46e5;
@@ -1570,6 +1657,92 @@ input:checked + .slider:before {
 .stat-card:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
+}
+
+.pricing-section {
+    min-inline-size: 0;
+    margin-block-end: 16px;
+    padding: 16px;
+    overflow-wrap: anywhere;
+}
+
+.pricing-section h2 {
+    margin-block: 0 12px;
+}
+
+.pricing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+    gap: 8px 16px;
+    min-inline-size: 0;
+}
+
+.pricing-details {
+    min-inline-size: 0;
+    margin-block: 12px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.pricing-guide summary,
+.pricing-details summary,
+.pricing-checkbox {
+    min-block-size: 44px;
+    align-content: center;
+    cursor: pointer;
+}
+
+.pricing-guide ol {
+    margin-block: 4px 0;
+    padding-inline-start: 24px;
+    color: var(--text-secondary);
+}
+
+.pricing-guide li + li {
+    margin-block-start: 8px;
+}
+
+.pricing-section .btn,
+#my-retail-modal .form-actions .btn {
+    min-block-size: 44px;
+    white-space: normal;
+}
+
+@media (max-width: 768px) {
+    .pricing-tier-table,
+    .pricing-tier-table tbody,
+    .pricing-tier-table tr {
+        display: block;
+    }
+    .pricing-tier-table thead {
+        position: absolute;
+        inline-size: 1px;
+        block-size: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+    }
+    .pricing-tier-table tr {
+        margin-block-end: 12px;
+        padding: 8px;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+    }
+    .pricing-tier-table td {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        text-align: end;
+        overflow-wrap: anywhere;
+    }
+    .pricing-tier-table td[data-label]::before {
+        content: attr(data-label);
+        text-align: start;
+        color: var(--text-secondary);
+    }
+    .pricing-section .btn {
+        inline-size: 100%;
+    }
 }
 
 .package-card {

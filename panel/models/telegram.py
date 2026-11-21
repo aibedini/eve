@@ -312,6 +312,7 @@ class TelegramServiceSession(db.Model):
         nullable=True, index=True,
     )
     action = db.Column(db.String(32), nullable=True, index=True)
+    pricing_quote = db.Column(db.JSON, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -335,6 +336,7 @@ class TelegramServiceRequest(db.Model):
     )
     request_type = db.Column(db.String(24), nullable=False, index=True)
     package_id = db.Column(db.Integer, db.ForeignKey('packages.id', ondelete='SET NULL'), nullable=True)
+    pricing_quote = db.Column(db.JSON, nullable=True)
     amount = db.Column(db.BigInteger, nullable=True)
     original_amount = db.Column(db.BigInteger, nullable=True)
     discount_amount = db.Column(db.BigInteger, nullable=True)
@@ -412,6 +414,7 @@ class TelegramPurchaseSession(db.Model):
     package_id = db.Column(db.Integer, db.ForeignKey('packages.id', ondelete='SET NULL'), nullable=True)
     bank_card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id', ondelete='SET NULL'), nullable=True)
     quoted_amount = db.Column(db.Integer, nullable=True)  # price frozen at payment time (Wave D promo base)
+    pricing_quote = db.Column(db.JSON, nullable=True)
     promo_id = db.Column(db.Integer, nullable=True)  # primary applied promo at freeze time
     promo_code = db.Column(db.String(64), nullable=True)  # customer-entered code
     discount_amount = db.Column(db.Integer, nullable=True)
@@ -436,6 +439,7 @@ class TelegramPurchaseRequest(db.Model):
     )
     server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
     package_id = db.Column(db.Integer, db.ForeignKey('packages.id', ondelete='SET NULL'), nullable=True)
+    pricing_quote = db.Column(db.JSON, nullable=True)
     bank_card_id = db.Column(db.Integer, db.ForeignKey('bank_cards.id', ondelete='SET NULL'), nullable=True)
     amount = db.Column(db.BigInteger, nullable=False)
     receipt_file_id = db.Column(db.Text, nullable=False)

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="{{ 'fa' if support_fa else 'en' }}" dir="{{ 'rtl' if support_fa else 'ltr' }}" data-theme="dark">
+{% macro tx(en, fa) %}{{ fa if support_fa else en }}{% endmacro %}
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ tx('Support chat','گفتگو با پشتیبانی') }} · Eve</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=app_version) }}">
+    <script nonce="{{ csp_nonce }}">
+        try {
+            const preference = localStorage.getItem('eve_theme');
+            if (preference === 'light' || preference === 'dark') document.documentElement.dataset.theme = preference;
+        } catch (error) {}
+    </script>
+</head>
+<body>
+<main class="support-portal support-layout" data-support-root data-fa="{{ 1 if support_fa else 0 }}">
+    <a class="btn btn-secondary" href="{{ url_for('auth.client_portal') }}">{{ tx('Back to portal','بازگشت به پورتال') }}</a>
+    <section class="support-card">
+        <h1>{{ tx('Support chat','گفتگو با پشتیبانی') }}</h1>
+        {% if services %}
+        <label class="form-group">{{ tx('Account','حساب') }}
+            <select class="form-select" data-chat-select>
+                {% for service in services %}<option value="{{ url_for('support.portal_chat', service_id=service.id) }}">{{ service.client_email_snapshot or ('#' ~ service.id) }}</option>{% endfor %}
+            </select>
+        </label>
+        <div class="support-list" role="log" aria-live="polite" data-chat-messages></div>
+        <form class="support-form" data-chat-url="{{ url_for('support.portal_chat', service_id=services[0].id) }}">
+            <label class="form-group">{{ tx('Message','پیام') }}<textarea name="message" rows="3" maxlength="4000" required></textarea></label>
+            <button class="btn btn-primary" type="submit">{{ tx('Send','ارسال') }}</button>
+        </form>
+        {% else %}
+        <p class="field-note">{{ tx('No verified subscription is linked to this portal account.', 'اشتراک تأییدشده‌ای به این حساب پورتال متصل نیست.') }}</p>
+        {% endif %}
+        <p id="support-status" class="field-note" role="status"></p>
+    </section>
+</main>
+<script src="{{ url_for('static', filename='support.js', v=app_version) }}" defer></script>
+</body>
+</html>

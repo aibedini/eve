@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% macro tx(en, fa) %}{{ fa if support_fa else en }}{% endmacro %}
+{% block page_title %}{{ tx('Request', 'درخواست') }} #{{ ticket.id }}{% endblock %}
+{% block content %}
+<div class="support-layout" data-support-root data-fa="{{ 1 if support_fa else 0 }}">
+    <a href="{{ url_for('support.workspace') }}" class="btn btn-secondary">{{ tx('Workspace', 'میز کار') }}</a>
+    <section class="support-card">
+        <h2 dir="auto">{{ ticket.ownership.client_email_snapshot or ('#' ~ ticket.id) }}</h2>
+        {% if ticket.note %}<p class="support-message" dir="auto">{{ ticket.note }}</p>{% endif %}
+        {% for row in messages %}
+            <div class="support-item">
+                <span>{{ tx('Customer','مشتری') if row.sender_type == 'customer' else tx('Support','پشتیبان') }} · {{ row.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                <p class="support-message" dir="auto">{{ row.message }}</p>
+                {% if row.attachment_file_id %}<a class="btn btn-secondary" href="{{ url_for('support.ticket_attachment', ticket_id=ticket.id, message_id=row.id) }}">{{ tx('Attachment', 'پیوست') }} · {{ row.attachment_name or row.attachment_kind }}</a>{% endif %}
+            </div>
+        {% endfor %}
+        {% if ticket.status == 'pending' %}
+            {% if ticket.request_type == 'support' %}
+            <form class="support-form" data-ticket-action="reply" data-ticket="{{ ticket.id }}">
+                <div class="form-group"><label for="support-reply">{{ tx('Reply', 'پاسخ') }}</label>
+                    <textarea id="support-reply" name="message" rows="4" required maxlength="4000"></textarea></div>
+                <label class="checkbox-label"><input type="checkbox" name="complete"><span class="checkmark"></span><span>{{ tx('Resolve after sending','بستن درخواست پس از ارسال') }}</span></label>
+                <button class="btn btn-primary" type="submit">{{ tx('Send reply', 'ارسال پاسخ') }}</button>
+            </form>
+            {% else %}
+            <p>{{ ticket.package.name if ticket.package else '' }} · {{ '{:,}'.format(ticket.amount or 0) }} {{ tx('T','تومان') }}</p>
+            {% if ticket.receipt_file_id %}<a class="btn btn-secondary" href="{{ url_for('support.ticket_receipt', ticket_id=ticket.id) }}">{{ tx('Download customer receipt','دریافت رسید مشتری') }}</a>{% endif %}
+            <div class="support-actions">
+                <form data-ticket-action="complete" data-ticket="{{ ticket.id }}"><button class="btn btn-primary" type="submit">{{ tx('Approve and renew', 'تأیید و تمدید') }}</button></form>
+                <form data-ticket-action="reject" data-ticket="{{ ticket.id }}"><button class="btn btn-secondary" type="submit">{{ tx('Reject', 'رد درخواست') }}</button></form>
+            </div>
+            {% endif %}
+        {% endif %}
+        <p id="support-status" class="field-note" role="status"></p>
+    </section>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='support.js', v=app_version) }}" defer></script>{% endblock %}

@@ -362,6 +362,8 @@ def ingest_sms_event():
         return jsonify({'accepted': True, 'duplicate': True})
     try:
         db.session.add(SmsGatewayEvent(**values))
+        from panel.services.support import record_sms_delivery
+        record_sms_delivery(values)
         db.session.commit()
     except IntegrityError:
         db.session.rollback()

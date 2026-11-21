@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% macro tx(en, fa) %}{{ fa if support_fa else en }}{% endmacro %}
+{% block title %}{{ tx('Support workspace', 'میز کار پشتیبانی') }} · Eve{% endblock %}
+{% block page_title %}{{ tx('Support workspace', 'میز کار پشتیبانی') }}{% endblock %}
+{% block content %}
+<div class="support-layout" data-support-root data-fa="{{ 1 if support_fa else 0 }}">
+    <div class="support-columns">
+        <section class="support-card">
+            <h2>{{ tx('Support queue', 'صف پشتیبانی') }}</h2>
+            <div class="support-list">
+            {% for service in chats %}
+                <a class="support-item" href="{{ url_for('support.chat_page', service_id=service.id) }}">
+                    <strong dir="auto">{{ service.client_email_snapshot or ('#' ~ service.id) }}</strong>
+                    <span>{{ tx('Portal chat', 'چت پورتال') }}</span>
+                </a>
+            {% endfor %}
+            {% for ticket in tickets %}
+                <a class="support-item" href="{{ url_for('support.ticket', ticket_id=ticket.id) }}">
+                    <strong dir="auto">{{ ticket.ownership.client_email_snapshot or ('#' ~ ticket.id) }}</strong>
+                    <span>{{ tx('Conversation', 'گفتگو') if ticket.request_type == 'support' else tx('Renewal', 'تمدید') }} · #{{ ticket.id }}</span>
+                </a>
+            {% endfor %}
+            {% if not chats and not tickets %}
+                <p class="field-note">{{ tx('No open requests in your queue.', 'در صف شما درخواست بازی وجود ندارد.') }}</p>
+            {% endif %}
+            </div>
+        </section>
+        <section class="support-card">
+            <h2>{{ tx('Customer accounts', 'حساب‌های مشتریان') }}</h2>
+            {% if 'customers' in allowed %}
+            <form id="support-search" class="support-actions">
+                <div class="form-group"><label for="support-query">{{ tx('Account name', 'نام حساب') }}</label>
+                    <input id="support-query" type="search" required minlength="2" maxlength="100" autocomplete="off"></div>
+                <button class="btn btn-primary" type="submit">{{ tx('Search', 'جست‌وجو') }}</button>
+            </form>
+            <div id="support-results" class="support-list" aria-live="polite"></div>
+            {% endif %}
+            {% if 'create' in allowed or 'free_create' in allowed %}
+            <details class="support-disclosure">
+                <summary>{{ tx('Create an account', 'ساخت حساب') }}</summary>
+                <form id="support-create" class="support-form">
+                    <div class="form-group"><label for="support-location">{{ tx('Assigned destination', 'مقصد تخصیص‌یافته') }}</label>
+                        <select class="form-select" id="support-location" required>
+                            {% for server, inbound in locations %}<option value="{{ server }}/{{ inbound }}">{{ server }} / {{ inbound }}</option>{% endfor %}
+                        </select></div>
+                    <div class="form-group"><label for="support-email">{{ tx('New account name', 'نام حساب جدید') }}</label>
+                        <input id="support-email" required maxlength="100" autocomplete="off"></div>
+                    <button type="submit" class="btn btn-secondary">{{ tx('Select package', 'انتخاب پکیج') }}</button>
+                </form>
+            </details>
+            {% endif %}
+            <div id="support-action" class="support-list" tabindex="-1"></div>
+            <p id="support-status" class="field-note" role="status"></p>
+        </section>
+    </div>
+    <section class="support-card">
+        <div class="support-heading">
+            <h2>{{ tx('My activity', 'کارکرد من') }}</h2>
+            {% include 'partials/support_period.html' %}
+        </div>
+        {% set labels = {'answered':tx('Customers answered','مشتریان پاسخ‌داده‌شده'), 'sms':tx('SMS sent','پیامک ارسال‌شده'), 'delivered':tx('SMS delivered','پیامک تحویل‌شده'), 'segments':tx('Reported SMS segments','قطعه‌های گزارش‌شدهٔ پیامک'), 'renewals':tx('Renewals','تمدید'), 'creations':tx('Paid accounts','ساخت پولی'), 'free':tx('Free accounts','ساخت رایگان'), 'gb':tx('GB sold','گیگ فروخته‌شده'), 'closed':tx('Resolved conversations','گفتگوهای بسته‌شده'), 'response_minutes':tx('Average response · min','میانگین پاسخ · دقیقه')} %}
+        <div class="support-metrics">
+            {% for key, value in current.items() %}
+            <div class="stat-card support-metric"><span>{{ labels[key] }}</span><strong>{{ value }}</strong>
+                <small>{{ tx('Previous comparable period', 'بازهٔ مشابه قبل') }} · {{ previous[key] }}</small></div>
+            {% endfor %}
+        </div>
+        {% if 'sms' in allowed %}<p class="field-note">{{ tx('SMS remaining today', 'سهمیهٔ باقی‌ماندهٔ امروز') }} · {{ sms_remaining }}</p>{% endif %}
+    </section>
+</div>
+<script type="application/json" nonce="{{ csp_nonce }}" id="support-capabilities">{{ allowed|list|tojson }}</script>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='support.js', v=app_version) }}" defer></script>{% endblock %}

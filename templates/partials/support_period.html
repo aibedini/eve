@@ -1,0 +1,6 @@
+<nav class="support-actions" aria-label="{{ 'بازهٔ گزارش' if support_fa else 'Report period' }}">
+    {% for key, en, fa in [('day','Today','امروز'), ('week','Week','هفته'), ('month','Month','ماه')] %}
+    <a class="btn {{ 'btn-primary' if key == period else 'btn-secondary' }}" href="?period={{ key }}"
+       {% if key == period %}aria-current="page"{% endif %}>{{ fa if support_fa else en }}</a>
+    {% endfor %}
+</nav>

@@ -141,6 +141,7 @@ FA = {
     'Disabled only': 'فقط غیرفعال\u200cها',
     'Accounts': 'اکانت‌ها',
     'No Phone': 'بدون شماره',
+    'Review the updated price before confirming.': 'پیش از تأیید، قیمت جدید را بررسی کنید.',
     'No valid phone number found.': 'شماره تلفن معتبری پیدا نشد.',
     'Download the X-UI database of the affected server(s) before applying, so you can restore if anything goes wrong.': 'پیش از اعمال، پایگاه دادهٔ X-UI سرور(های) تحت\u200cتأثیر را دانلود کنید تا در صورت بروز مشکل بتوانید بازیابی کنید.',
     'Duration (Days)': 'مدت (روز)',

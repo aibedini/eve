@@ -57,6 +57,7 @@ relative link does not resolve.
 - [Per-server snapshot cache](performance/PER_SERVER_CACHE.md) - performance/PER_SERVER_CACHE.md
 - [Hot-path query budget](performance/QUERY_OPTIMIZATION.md) - performance/QUERY_OPTIMIZATION.md
 - [Real-Redis multi-process proof](performance/REDIS_MULTIPROCESS.md) - performance/REDIS_MULTIPROCESS.md
+- [Renewal progress performance](performance/RENEW_PROGRESS.md) - renewal progress and polling behavior
 - [Scoped refresh locks](performance/REFRESH_LOCK.md) - performance/REFRESH_LOCK.md
 - [Mutation / cache / UI regression suite](performance/REGRESSION_SUITE.md) - performance/REGRESSION_SUITE.md
 - [Per-server scheduling benchmark and HOT capacity](performance/SCHEDULING_BENCHMARK.md) - performance/SCHEDULING_BENCHMARK.md
@@ -122,6 +123,8 @@ relative link does not resolve.
 
 - [Release security](RELEASE_SECURITY.md) - RELEASE_SECURITY.md
 - [Telegram Sales and Support Roadmap](TELEGRAM_ROADMAP.md) - TELEGRAM_ROADMAP.md
+- [راهنمای تیم پشتیبانی](SUPPORT_GUIDE.md) - نقش‌ها، چت، پیامک، حقوق و تسویه
+- [راهنمای پکیج و تعرفه](PRICING_GUIDE.md) - قیمت فروش و هزینهٔ رسلر
 - [Telegram: current state audit](CURRENT_STATE_TELEGRAM.md) - CURRENT_STATE_TELEGRAM.md
 
 ## UI design system

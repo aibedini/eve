@@ -235,6 +235,8 @@ def update_admin(admin_id):
         validate_password_strength,
     )
     admin = Admin.query.filter_by(id=admin_id).with_for_update().first_or_404()
+    if admin.role == 'support':
+        return jsonify(success=False, error='Manage support operators in Support team'), 403
     if admin.role == 'deleted':
         return jsonify({'success': False, 'error': 'User has been deleted'}), 410
     data = request.json
@@ -296,6 +298,8 @@ def update_admin(admin_id):
         revoke_other_sessions(admin.id, keep)
     if data.get('role'):
         new_role = (data.get('role') or '').strip().lower()
+        if new_role not in ('reseller', 'admin', 'superadmin'):
+            return jsonify(success=False, error='Invalid role'), 400
         if new_role:
             if new_role == 'superadmin' and not editor_is_super:
                 return jsonify({"success": False, "error": "Access Denied"}), 403

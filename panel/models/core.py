@@ -326,6 +326,7 @@ class Package(db.Model):
     reseller_cost_mode = db.Column(db.String(16), nullable=False, default='auto', server_default='auto')
     reseller_discount_percent = db.Column(db.Float, nullable=True)
     reseller_rounding = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    panel_roles = db.Column(db.JSON, nullable=True)
     enabled = db.Column(db.Boolean, default=True)
     # Extended columns (added via ALTER TABLE migration for existing DBs)
     scope = db.Column(db.String(20), default='global')        # global | assigned | personal
@@ -355,6 +356,7 @@ class Package(db.Model):
             'reseller_cost_mode': self.reseller_cost_mode or 'auto',
             'reseller_discount_percent': self.reseller_discount_percent,
             'reseller_rounding': self.reseller_rounding or 0,
+            'panel_roles': self.panel_roles,
             'enabled': self.enabled,
             'scope': self.scope or 'global',
             'assigned_reseller_ids': assigned,
@@ -367,6 +369,23 @@ class Package(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class ResellerOffer(db.Model):
+    __tablename__ = 'reseller_offers'
+    reseller_id = db.Column(db.Integer, db.ForeignKey('admins.id'), primary_key=True)
+    package_id = db.Column(db.Integer, db.ForeignKey('packages.id', ondelete='CASCADE'), primary_key=True)
+    selling_price = db.Column(db.Integer, nullable=True)
+    published = db.Column(db.Boolean, nullable=True)
+    wholesale_price = db.Column(db.Integer, nullable=True)
+
+
+class ResellerContract(db.Model):
+    __tablename__ = 'reseller_contracts'
+    reseller_id = db.Column(db.Integer, db.ForeignKey('admins.id'), primary_key=True)
+    policy = db.Column(db.JSON, nullable=False)
+    quota_mib = db.Column(db.BigInteger, nullable=False, default=0, server_default='0')
+    version = db.Column(db.Integer, nullable=False, default=1, server_default='1')
 
 
 class PriceTier(db.Model):

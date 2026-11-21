@@ -36,6 +36,21 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: path prefix -> (tier-1 modules, tier-2 extra modules). Longest prefix wins, so a more
 #: specific mapping can refine a broad one.
 MAPPING = (
+    ('panel/routes/support.py', (
+        ['tests.test_support_workspace'], ['tests.test_ui_design_system', 'tests.test_telegram_rotate'],
+    )),
+    ('panel/services/support.py', (
+        ['tests.test_support_workspace'], ['tests.test_sms_gateway_events'],
+    )),
+    ('panel/models/support.py', (
+        ['tests.test_support_workspace'], [],
+    )),
+    ('alembic/versions/8ae6d12c4b97_', (
+        ['tests.test_support_workspace'], [],
+    )),
+    ('alembic/versions/6c2b98d107ef_', (
+        ['tests.test_alembic_pricing_catalogs'], [],
+    )),
     ('alembic/versions/4fdb05815625_', (
         ['tests.test_alembic_reseller_costs'], [],
     )),

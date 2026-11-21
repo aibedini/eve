@@ -26,6 +26,7 @@ from panel.models import (
 from panel.routes.common import admin_is_superadmin, login_required, permission_required
 from panel.security import outbound_tls_verify, panel_tls_verify
 from panel.services import client_operations as client_operations_state
+from panel.services.billing import creation_reseller_id, package_allowed_in_panel, pricing_owner, pricing_quote, pricing_quote_revision
 from panel.services.client_operations import (
     begin_client_operation, complete_client_operation, fail_client_operation,
     install_client_operation_response_guard, load_client_operation,
@@ -43,6 +44,40 @@ from panel.services.payment_duplicate import (
 )
 
 bp = Blueprint('clients', __name__)
+
+
+def _pricing_payer(actor, reseller_id):
+    if reseller_id is None:
+        return actor if actor.role == 'reseller' else None
+    reseller = db.session.get(Admin, reseller_id)
+    if not reseller or reseller.role != 'reseller' or not reseller.enabled:
+        raise ValueError('The service reseller is unavailable')
+    return reseller
+
+
+def _support_pricing_owner(actor, detected_owner):
+    from flask import g
+    if actor.role == 'support':
+        profile = getattr(g, 'support_profile', None)
+        if not profile or profile.owner_id != detected_owner:
+            raise PermissionError('Account is outside the support operator scope')
+    return detected_owner
+
+
+def _operation_pricing(actor, payer, server_id, action, *, package=None, volume=0, days=0,
+                       unlimited=False, free=False, order_quote=None):
+    if order_quote is not None:
+        if (not package or order_quote.get('package_id') != package.id
+                or order_quote.get('reseller_id') != (payer.id if payer else None)
+                or order_quote.get('server_id') != server_id):
+            raise ValueError('Order pricing no longer matches the service or reseller')
+        if free:
+            return dict(order_quote, amount=0, quota_mib=0)
+        return order_quote
+    if package and not package_allowed_in_panel(package, actor, payer.id if payer else None, action):
+        raise ValueError('Package is unavailable for this operation')
+    return pricing_quote(payer, package=package, volume_gb=volume, days=days,
+                         server_id=server_id, unlimited=unlimited, free=free)
 
 # A visible progress dialog polls every 1.5 s; the general 500/hour budget is too low.
 RENEW_PROGRESS_POLL_LIMIT = '6000 per hour; 40000 per day'
@@ -89,7 +124,7 @@ def check_sender_card_payment():
 _RENEWAL_SOURCES = ('explicit_renew', 'admin_reset', 'telegram_renew', 'api_mutation')
 
 
-def _cached_client_uuid(server_id, email: str):
+def _cached_client_uuid(server_id, email: str, inbound_id=None):
     """Best-effort stable identity for an email-addressed cached client.
 
     Four legacy mutation paths (traffic reset, superadmin edit, bulk repair)
@@ -109,6 +144,8 @@ def _cached_client_uuid(server_id, email: str):
         for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
             try:
                 if int(inbound.get('server_id', -1)) != sid:
+                    continue
+                if inbound_id is not None and int(inbound.get('id', -1)) != inbound_id:
                     continue
             except (TypeError, ValueError):
                 continue
@@ -447,9 +484,9 @@ def toggle_client(server_id, inbound_id):
 def reset_client_traffic(server_id, inbound_id):
     from app import (  # deferred: app-level helper, avoids circular import
         CLIENT_RESET_FALLBACKS, CLIENT_UPDATE_FALLBACKS, _has_client_access, _json_field,
-        _push_full_inbound, _reseller_can_create_free, _user_can_afford, app, build_panel_url,
-        calculate_reseller_price, collect_endpoint_templates, fetch_inbounds, find_client,
-        get_config, get_xui_session, log_transaction, patch_cached_client, server_is_v3,
+        _push_full_inbound, _reseller_can_create_free, app, build_panel_url,
+        collect_endpoint_templates, fetch_inbounds, find_client,
+        get_xui_session, log_transaction, patch_cached_client, server_is_v3,
         v3_reset_client, v3_update_client,
     )
     user = db.session.get(Admin, session['admin_id'])
@@ -473,25 +510,31 @@ def reset_client_traffic(server_id, inbound_id):
     if volume_gb < 0:
         volume_gb = 0
     
-    base_cost_gb = get_config('cost_per_gb', 0)
-    user_cost_gb = calculate_reseller_price(user, base_price=base_cost_gb, cost_type='gb')
-    
     is_free = bool(data.get('is_free', False))
     if is_free and not _reseller_can_create_free(user):
         return jsonify({"success": False, "error": "Free creation is not permitted for your account"}), 403
-    if is_free:
-        charge_amount = 0
-    else:
-        charge_amount = volume_gb * user_cost_gb if volume_gb > 0 else 0
-
     if user.role == 'reseller':
         if not _has_client_access(user, server_id, email, inbound_id=inbound_id):
             return jsonify({"success": False, "error": "Access denied"}), 403
-        if not is_free and user_cost_gb > 0 and volume_gb <= 0:
+        if not is_free and volume_gb <= 0:
             return jsonify({"success": False, "error": "Billable volume required"}), 400
-        ok, err = _user_can_afford(user, charge_amount)
-        if not ok:
-            return jsonify({"success": False, "error": err}), 402
+    try:
+        payer = _pricing_payer(user, pricing_owner(
+            server_id, _cached_client_uuid(server_id, email, inbound_id), email, inbound_id=inbound_id))
+        quote = pricing_quote(payer, volume_gb=volume_gb, server_id=server_id,
+                              free=is_free or not volume_gb, include_duration=False)
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 400
+    charge_amount = quote['amount']
+
+    def record_reset_charge():
+        if not (charge_amount or quote['quota_mib']):
+            return None
+        return log_transaction(
+            (payer or user).id, -charge_amount if payer else charge_amount, 'reset_traffic', 'Reset traffic',
+            server_id=server.id, sender_card=data.get('sender_card') or '', card_id=data.get('card_id'),
+            category='usage' if payer else 'income', client_email=email, volume_gb=volume_gb,
+        )
 
     operation_key = (
         request.headers.get('Idempotency-Key')
@@ -503,7 +546,7 @@ def reset_client_traffic(server_id, inbound_id):
     client_operation, disposition, operation_data = begin_client_operation(
         idempotency_key=operation_key, action='reset_traffic', admin=user,
         server_id=server_id, inbound_id=inbound_id, client_email=email,
-        amount=charge_amount, payload=operation_payload,
+        amount=charge_amount, payload=operation_payload, quote=quote,
     )
     if disposition == 'replay':
         operation_data.setdefault('idempotent_replay', True)
@@ -577,14 +620,7 @@ def reset_client_traffic(server_id, inbound_id):
                 'totalGB': volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None,
             })
 
-            transaction_record = None
-            if charge_amount > 0:
-                sender_card = data.get('sender_card', '') or ''
-                card_id = data.get('card_id')
-                if user.role == 'reseller':
-                    transaction_record = log_transaction(user.id, -charge_amount, 'reset_traffic', "Reset traffic (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
-                else:
-                    transaction_record = log_transaction(user.id, charge_amount, 'reset_traffic', "Reset traffic (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
+            transaction_record = record_reset_charge()
             patch_cached_client(server.id, email, up=0, down=0,
                                 total_gb_bytes=(volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None))
             if volume_gb > 0:
@@ -642,14 +678,7 @@ def reset_client_traffic(server_id, inbound_id):
                     'totalGB': volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None,
                 })
 
-                transaction_record = None
-                if charge_amount > 0:
-                    sender_card = data.get('sender_card', '') or ''
-                    card_id = data.get('card_id')
-                    if user.role == 'reseller':
-                        transaction_record = log_transaction(user.id, -charge_amount, 'reset_traffic', "Reset traffic (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email)
-                    else:
-                        transaction_record = log_transaction(user.id, charge_amount, 'reset_traffic', "Reset traffic (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email)
+                transaction_record = record_reset_charge()
 
                 patch_cached_client(server.id, email, up=0, down=0,
                                     total_gb_bytes=(volume_gb * 1024 * 1024 * 1024 if volume_gb > 0 else None))
@@ -1687,21 +1716,21 @@ def retry_renewal_sms(operation_key):
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/renew', methods=['POST'])
 @login_required
 @permission_required('clients.write')
-def renew_client(server_id, inbound_id, email):
+def renew_client(server_id, inbound_id, email, *, order_quote=None):
     """Renew client expiry and/or volume"""
     from app import (  # deferred: app-level helper, avoids circular import
         CLIENT_RESET_FALLBACKS, CLIENT_UPDATE_FALLBACKS, DEFAULT_RENEW_SMS_TEMPLATE,
         DEFAULT_RENEW_TEMPLATE, DEFAULT_TG_TPL_RENEW, GLOBAL_SERVER_DATA,
-        RENEW_SMS_TEMPLATE_TYPE, _account_info_channel_links, _calculate_minimum_price,
+        RENEW_SMS_TEMPLATE_TYPE, _account_info_channel_links,
         _clear_message_cooldown, _compute_client_service_state,
         _fire_automation_sms, _fire_cancel_stale_account_sms,
         _get_dashboard_status_thresholds, _get_panel_ui_lang,
         _get_telegram_depletion_settings, _get_whatsapp_runtime_settings, _has_client_access,
         _json_field, _notification_bot_for_account, _notify_customer_telegram,
         _push_full_inbound, _recommendation_template_vars, _render_text_template,
-        _reseller_can_create_free, _toggle_optout_tags, _user_can_afford, _v3_sanitize_email,
+        _reseller_can_create_free, _toggle_optout_tags, _v3_sanitize_email,
         _whatsapp_automation_allowed_for_account, _whatsapp_render_bot_template, app,
-        build_panel_url, calculate_reseller_price, collect_endpoint_templates, fetch_inbounds,
+        build_panel_url, collect_endpoint_templates, fetch_inbounds,
         find_client, format_jalali, format_remaining_days, get_xui_session, log_transaction,
         patch_cached_client, persist_detected_panel_type, server_is_v3, v3_enable_client,
         _v3_get_client,
@@ -1820,16 +1849,23 @@ def renew_client(server_id, inbound_id, email):
         return int(number) if number.is_integer() else number
 
     try:
+        reseller_id = pricing_owner(
+            server_id, _cached_client_uuid(server_id, email, inbound_id), email, inbound_id=inbound_id)
+        if order_quote is not None and reseller_id is None:
+            reseller_id = order_quote.get('reseller_id')
+        payer = _pricing_payer(user, _support_pricing_owner(user, reseller_id))
         if mode == 'package':
             pkg_id = data.get('package_id')
             package = db.session.get(Package, pkg_id) if pkg_id else None
-            if not package or not getattr(package, 'enabled', True):
+            if not package:
                 return _finish({"success": False, "error": "Invalid package selected"}, 400)
-            days_to_add = int(package.days or 0)
-            volume_gb_to_add = int(package.volume or 0)
+            quote = _operation_pricing(user, payer, server_id, 'renew', package=package,
+                                       free=is_free, order_quote=order_quote)
+            days_to_add = int(quote['days'])
+            volume_gb_to_add = int(quote['volume_gb'])
             volume_provided = True
-            price = calculate_reseller_price(user, package=package, server_id=server_id)
-            pkg_name = package.name
+            price = quote['amount']
+            pkg_name = quote['package_name']
             description = f"Renew Package: {package.name} - {email}"
             if days_to_add < 0:
                 return _finish({"success": False, "error": "Package is misconfigured (negative days)"}, 400)
@@ -1851,14 +1887,10 @@ def renew_client(server_id, inbound_id, email):
                 days_to_add = 0
             # 0 days or 0 volume means unlimited; allowed for unlimited users
             
-            reseller_context_id = user.id if user.role == 'reseller' else None
-            price, _cpg, _cpd, _tier = _calculate_minimum_price(
-                volume_gb_to_add,
-                days_to_add,
-                reseller_id=reseller_context_id,
-                server_id=server_id,
-                user=user,
-            )
+            quote = _operation_pricing(
+                user, payer, server_id, 'renew', volume=volume_gb_to_add, days=days_to_add,
+                unlimited=volume_provided and volume_gb_to_add == 0, free=is_free)
+            price = quote['amount']
             days_label = f"{days_to_add} Days" if days_to_add > 0 else "Unlimited Days"
             if not volume_provided:
                 vol_label = "Keep Volume"
@@ -1866,14 +1898,13 @@ def renew_client(server_id, inbound_id, email):
                 vol_label = f"{volume_gb_to_add} GB" if volume_gb_to_add > 0 else "Unlimited Volume"
             pkg_name = 'Custom'
             description = f"Renew Custom: {days_label}, {vol_label} - {email}"
+    except PermissionError:
+        return _finish({"success": False, "error": "Access denied"}, 403)
     except (ValueError, TypeError) as e:
         return _finish({"success": False, "error": f"Invalid data: {e}"}, 400)
     except Exception as e:
         app.logger.error("Renew price-calc error (trace=%s): %s", renewal_trace_id, e, exc_info=True)
         return _finish({"success": False, "error": f"Server error during price calculation: {e}"}, 500)
-
-    if is_free:
-        price = 0
 
     # Gift volume: added on top of the renewal volume, free of charge.
     try:
@@ -1893,9 +1924,6 @@ def renew_client(server_id, inbound_id, email):
         if user.role == 'reseller':
             if not _has_client_access(user, server_id, email, inbound_id=inbound_id):
                 return _finish({"success": False, "error": "Access denied"}, 403)
-            ok, err = _user_can_afford(user, price)
-            if not ok:
-                return _finish({"success": False, "error": err}, 402)
     except Exception as e:
         app.logger.error("Renew access-check error (trace=%s): %s", renewal_trace_id, e, exc_info=True)
         return _finish({"success": False, "error": f"Server error during access check: {e}"}, 500)
@@ -1908,6 +1936,10 @@ def renew_client(server_id, inbound_id, email):
     operation_payload = dict(data)
     operation_payload.pop('operation_id', None)
     operation_id_holder['key'] = operation_key
+    if (not is_free and data.get('quote_revision') and data['quote_revision'] != pricing_quote_revision(quote)
+            and not load_client_operation(operation_key, action='renew', admin_id=user.id)):
+        return _finish({'success': False, 'code': 'pricing_changed',
+                        'error': 'Price changed. Refresh the quote and confirm again.'}, 409)
     client_operation, operation_disposition, operation_data = begin_client_operation(
         idempotency_key=operation_key,
         action='renew',
@@ -1917,6 +1949,7 @@ def renew_client(server_id, inbound_id, email):
         client_email=email,
         amount=price,
         payload=operation_payload,
+        quote=dict(quote, free=is_free) if user.role == 'support' else quote,
     )
     if operation_disposition == 'replay':
         client_operation = None
@@ -2095,6 +2128,14 @@ def renew_client(server_id, inbound_id, email):
                             ('expiryTime', 'totalGB', 'enable', 'up', 'down')}
         _before_evidence.update(source_endpoint='inbounds/list',
                                 timestamp_ms=int(time.time() * 1000), status='ok')
+        if user.role == 'support':
+            from flask import g
+            from panel.services.support import scoped_account
+            valid, live = xui_adapter.read_authoritative_client_settings(server, session_obj, email)
+            if (not valid or not isinstance(live, dict) or str(live.get('id')) !=
+                    getattr(g, 'support_client_uuid', None) or
+                    not scoped_account(g.support_profile, server_id, inbound_id, email, live)):
+                return _finish({'success': False, 'code': 'account_scope_changed'}, 409)
         if timing.get('used_cache_client'):
             # A cache can guide intent arithmetic; it cannot prove a panel change.
             _before_evidence = {'source_endpoint': 'cache', 'status': 'unverified'}
@@ -2304,6 +2345,8 @@ def renew_client(server_id, inbound_id, email):
             # with every later Re-check.
             'anchor_ms': int(time.time() * 1000),
         }
+        if user.role == 'support':
+            _expected_intent['client_uuid'] = g.support_client_uuid
         _intent_context = {
             'server_id': server.id,
             'inbound_id': inbound_id,
@@ -2472,6 +2515,7 @@ def renew_client(server_id, inbound_id, email):
                     'expiryTime': new_expiry,
                     'totalGB': new_volume,
                     'enable': True,
+                    **({'client_uuid': g.support_client_uuid} if user.role == 'support' else {}),
                 })
                 client_operation_panel_applied = True
                 
@@ -3061,16 +3105,13 @@ def renew_client(server_id, inbound_id, email):
                         "Renew operation %s was already finalized; reusing its durable "
                         "record (trace=%s)",
                         getattr(client_operation, 'idempotency_key', None), renewal_trace_id)
-                elif is_free:
-                    if user.role == 'reseller':
-                        transaction_record = log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
-                    else:
-                        transaction_record = log_transaction(user.id, 0, 'renew', f"User Renewal (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
-                elif price > 0:
-                    if user.role == 'reseller':
-                        transaction_record = log_transaction(user.id, -price, 'renew', f"User Renewal (Credit Usage) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
-                    else:
-                        transaction_record = log_transaction(user.id, price, 'renew', f"User Renewal (Income) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add)
+                elif is_free or price > 0 or quote['quota_mib']:
+                    transaction_record = log_transaction(
+                        (payer or user).id, -price if payer else price, 'renew', description[:255],
+                        server_id=server.id, sender_card=sender_card, card_id=card_id,
+                        category='usage' if payer else 'income', client_email=email,
+                        package_name=pkg_name, volume_gb=volume_gb_to_add, days=days_to_add,
+                    )
 
 
                 whatsapp_runtime = _get_whatsapp_runtime_settings()
@@ -4362,15 +4403,15 @@ def client_qrcode():
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/add', methods=['POST'])
 @login_required
 @permission_required('clients.write')
-def add_client(server_id, inbound_id):
+def add_client(server_id, inbound_id, *, order_quote=None):
     from app import (  # deferred: app-level helper, avoids circular import
         CLIENT_CREATED_SMS_TEMPLATE_TYPE, DEFAULT_CLIENT_CREATED_SMS_TEMPLATE,
         GLOBAL_SERVER_DATA, INBOUND_GET_FALLBACKS, INBOUND_UPDATE_FALLBACKS,
-        _account_info_channel_links, _calculate_minimum_price, _cancel_stale_account_sms,
+        _account_info_channel_links, _cancel_stale_account_sms,
         _fire_automation_sms, _json_field, _render_text_template, _reseller_can_create_free,
-        _safe_response_json, _ss_password, _user_can_afford, add_cached_client, app,
+        _safe_response_json, _ss_password, add_cached_client, app,
         build_panel_subscription_url, build_panel_url, build_public_subscription_url,
-        calculate_reseller_price, collect_endpoint_templates,
+        collect_endpoint_templates,
         ensure_reseller_allowed_for_assignment, generate_client_link, get_reseller_access_maps,
         get_xui_session, invalidate_ownership_cache, is_inbound_accessible,
         is_server_accessible, log_transaction, server_is_v3, v3_add_client,
@@ -4398,36 +4439,39 @@ def add_client(server_id, inbound_id):
     description = ""
     pkg_name = None
 
-    if mode == 'package':
-        pkg_id = data.get('package_id')
-        package = db.session.get(Package, pkg_id)
-        if not package: return jsonify({"success": False, "error": "Invalid Package"}), 400
-
-        price = calculate_reseller_price(user, package=package, server_id=server_id)
-        days = package.days
-        volume_gb = package.volume
-        pkg_name = package.name
-        description = f"Purchase Package: {package.name} - {email}"
-
-    else:
-        days = int(data.get('days', 30))
-        volume_gb = int(data.get('volume', 0))
-        pkg_name = 'Custom'
-
-        reseller_context_id = user.id if user.role == 'reseller' else None
-        price, _cpg, _cpd, _tier = _calculate_minimum_price(
-            volume_gb,
-            days,
-            reseller_id=reseller_context_id,
-            server_id=server_id,
-            user=user,
-        )
-        days_label = 'Unlimited' if days == 0 else str(days)
-        vol_label  = 'Unlimited' if volume_gb == 0 else str(volume_gb)
-        description = f"Custom Plan: {days_label} Days, {vol_label} GB - {email}"
-
-    if is_free:
-        price = 0
+    try:
+        if user.role == 'support':
+            from flask import g
+            profile = getattr(g, 'support_profile', None)
+            if not profile:
+                raise PermissionError('Access denied')
+            reseller_id = profile.owner_id
+        else:
+            reseller_id = order_quote.get('reseller_id') if order_quote else creation_reseller_id(user, data.get('reseller_id'))
+        payer = _pricing_payer(user, reseller_id)
+        if mode == 'package':
+            pkg_id = data.get('package_id')
+            package = db.session.get(Package, pkg_id) if pkg_id else None
+            if not package:
+                raise ValueError('Invalid package')
+            quote = _operation_pricing(user, payer, server_id, 'create', package=package,
+                                       free=is_free, order_quote=order_quote)
+        else:
+            days = int(data.get('days', 30))
+            volume_gb = int(data.get('volume', 0))
+            if not 0 <= days <= 10000 or not 0 <= volume_gb <= 1000000:
+                raise ValueError('Duration or volume is outside the supported range')
+            quote = _operation_pricing(user, payer, server_id, 'create', volume=volume_gb,
+                                       days=days, unlimited=volume_gb == 0, free=is_free)
+        price = quote['amount']
+        days, volume_gb = quote['days'], quote['volume_gb']
+        pkg_name = quote['package_name']
+        description = f"Purchase Package: {pkg_name} - {email}" if mode == 'package' else (
+            f"Custom Plan: {days} Days, {volume_gb} GB - {email}")
+    except PermissionError as exc:
+        return jsonify(success=False, error=str(exc)), 403
+    except (ValueError, TypeError, OverflowError) as exc:
+        return jsonify(success=False, error=str(exc)), 400
 
     if user.role == 'reseller':
         if not is_server_accessible(server_id, allowed_map, assignments):
@@ -4435,9 +4479,6 @@ def add_client(server_id, inbound_id):
         if not is_inbound_accessible(server_id, inbound_id, allowed_map, assignments):
             return jsonify({"success": False, "error": "Access to this inbound is denied"}), 403
         
-        ok, err = _user_can_afford(user, price)
-        if not ok:
-            return jsonify({"success": False, "error": err}), 402
 
     operation_key = (
         request.headers.get('Idempotency-Key')
@@ -4446,10 +4487,14 @@ def add_client(server_id, inbound_id):
     )
     operation_payload = dict(data)
     operation_payload.pop('operation_id', None)
+    if (not is_free and data.get('quote_revision') and data['quote_revision'] != pricing_quote_revision(quote)
+            and not load_client_operation(operation_key, action='add_client', admin_id=user.id)):
+        return jsonify(success=False, code='pricing_changed', error='Price changed. Refresh the quote and confirm again.'), 409
     client_operation, disposition, operation_data = begin_client_operation(
         idempotency_key=operation_key, action='add_client', admin=user,
         server_id=server_id, inbound_id=inbound_id, client_email=email,
         amount=price, payload=operation_payload,
+        quote=dict(quote, free=is_free) if user.role == 'support' else quote,
     )
     if disposition == 'replay':
         operation_data.setdefault('idempotent_replay', True)
@@ -4465,6 +4510,16 @@ def add_client(server_id, inbound_id):
 
     session_obj, error = get_xui_session(server)
     if error: return jsonify({"success": False, "error": error})
+
+    def record_creation_charge(sender_card, card_id):
+        if not (is_free or price > 0 or quote['quota_mib']):
+            return None
+        return log_transaction(
+            (payer or user).id, -price if payer else price, 'purchase', description[:255],
+            server_id=server.id, sender_card=sender_card, card_id=card_id,
+            category='usage' if payer else 'income', client_email=email,
+            package_name=pkg_name, volume_gb=volume_gb, days=days,
+        )
 
     try:
         client_uuid = str(uuid.uuid4())
@@ -4513,22 +4568,16 @@ def add_client(server_id, inbound_id):
             sender_card = data.get('sender_card', '') or ''
             card_id = data.get('card_id')
             transaction_record = None
-            if is_free:
-                transaction_record = log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category=('usage' if user.role == 'reseller' else 'income'), client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
-            elif price > 0:
-                if user.role == 'reseller':
-                    transaction_record = log_transaction(user.id, -price, 'purchase', "Add User (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
-                else:
-                    transaction_record = log_transaction(user.id, price, 'purchase', "Add User (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
+            transaction_record = record_creation_charge(sender_card, card_id)
 
             # Ownership row per assigned inbound (price recorded once on the first)
             for _idx, _iid in enumerate(assign_ids):
                 db.session.add(ClientOwnership(
-                    reseller_id=user.id, server_id=server.id, inbound_id=_iid,
+                    reseller_id=(payer or user).id, server_id=server.id, inbound_id=_iid,
                     client_email=email, client_uuid=client_uuid,
                     price=(price if _idx == 0 else 0)))
                 try:
-                    ensure_reseller_allowed_for_assignment(user, server.id, _iid)
+                    ensure_reseller_allowed_for_assignment(payer or user, server.id, _iid)
                 except Exception:
                     pass
             db.session.commit()
@@ -4726,19 +4775,10 @@ def add_client(server_id, inbound_id):
             sender_card = data.get('sender_card', '') or ''
             card_id = data.get('card_id')
             transaction_record = None
-            if is_free:
-                if user.role == 'reseller':
-                    transaction_record = log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
-                else:
-                    transaction_record = log_transaction(user.id, 0, 'purchase', f"Add User (Free) - {description}", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
-            elif price > 0:
-                if user.role == 'reseller':
-                    transaction_record = log_transaction(user.id, -price, 'purchase', "Add User (Credit Usage)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='usage', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
-                else:
-                    transaction_record = log_transaction(user.id, price, 'purchase', "Add User (Income)", server_id=server.id, sender_card=sender_card, card_id=card_id, category='income', client_email=email, package_name=pkg_name, volume_gb=volume_gb, days=days)
+            transaction_record = record_creation_charge(sender_card, card_id)
             
             ownership = ClientOwnership(
-                reseller_id=user.id,
+                reseller_id=(payer or user).id,
                 server_id=server.id,
                 inbound_id=inbound_id,
                 client_email=email,
@@ -4749,7 +4789,7 @@ def add_client(server_id, inbound_id):
 
             # Keep reseller "Allowed Servers" UI in sync with ownership creation
             try:
-                ensure_reseller_allowed_for_assignment(user, server.id, inbound_id)
+                ensure_reseller_allowed_for_assignment(payer or user, server.id, inbound_id)
             except Exception:
                 pass
 

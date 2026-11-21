@@ -1,6 +1,10 @@
 """SQLAlchemy models, split by domain. All names are re-exported here and
 further re-exported by app.py, so existing ``from app import X`` callers
 (workers, tests) keep working unchanged."""
+from panel.models.support import (
+    SupportActivity, SupportBudget, SupportChat, SupportChatMessage, SupportContract,
+    SupportOperator, SupportPayroll, SupportRole,
+)
 from panel.models.core import (
     Admin,
     Server,
@@ -9,6 +13,8 @@ from panel.models.core import (
     CustomSubscriptionConfig,
     FAQ,
     Package,
+    ResellerOffer,
+    ResellerContract,
     PriceTier,
     SystemConfig,
     BankCard,
