@@ -3082,7 +3082,7 @@ def _cancel_stale_account_sms(server_id, email: str, *, reason: str) -> dict:
 def _fire_cancel_stale_account_sms(server_id, email: str, *, reason: str,
                                    client_uuid=None, event_type='renewal',
                                    operation_id=None, correlation_id=None,
-                                   client=None) -> None:
+                                   client=None, observed_state=None) -> None:
     """Mirror a successful renewal into the notification lifecycle. Async.
 
     This is the single chokepoint every successful renewal path reaches, and it
@@ -3124,6 +3124,7 @@ def _fire_cancel_stale_account_sms(server_id, email: str, *, reason: str,
                     operation_id=operation_id,
                     correlation_id=correlation_id,
                     reason=reason,
+                    observed_state=observed_state,
                 )
                 if lifecycle_result.get('error'):
                     app.logger.error(

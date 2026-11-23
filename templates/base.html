@@ -430,6 +430,9 @@
                 </a>
                 
                 {% if is_superadmin %}
+                <a href="{{ url_for('machine_admin.settings') }}" class="nav-item {% if request.endpoint == 'machine_admin.settings' %}active{% endif %}">
+                    <span>{{ 'اتصال GOD AI' if panel_lang == 'fa' else 'GOD AI Integration' }}</span>
+                </a>
                 <a href="{{ url_for('pages.servers_page') }}" class="nav-item {% if request.endpoint == 'pages.servers_page' %}active{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="2" y="2" width="20" height="8"></rect>

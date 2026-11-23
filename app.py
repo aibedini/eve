@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.23.21"
+APP_VERSION = "2.23.22"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -709,6 +709,8 @@ def _security_per_request_setup():
     g.request_id = _request_id_from(
         request.headers.get('X-Request-ID'), secrets.token_hex(8))
     g.request_started = time.perf_counter()
+    if request.path == '/machine/v1' or request.path.startswith('/machine/v1/'):
+        return
     _maybe_migrate_server_passwords()
 
     # Reject cross-site browser mutations for session-authenticated users.
@@ -947,6 +949,9 @@ def _want_json() -> bool:
 
 @app.errorhandler(404)
 def not_found(e):
+    if request.path == '/machine/v1' or request.path.startswith('/machine/v1/'):
+        from panel.routes.machine import machine_error, response_headers
+        return response_headers(machine_error(e))
     if _want_json():
         return jsonify({'success': False, 'error': f'Not found: {request.path}'}), 404
     return e
@@ -954,6 +959,9 @@ def not_found(e):
 
 @app.errorhandler(405)
 def method_not_allowed(e):
+    if request.path == '/machine/v1' or request.path.startswith('/machine/v1/'):
+        from panel.routes.machine import machine_error, response_headers
+        return response_headers(machine_error(e))
     if _want_json():
         return jsonify({'success': False, 'error': f'Method not allowed: {request.method} {request.path}'}), 405
     return e
@@ -3131,6 +3139,9 @@ from panel.routes.sms_gateway_events import bp as sms_gateway_events_bp
 from panel.routes.settings import bp as settings_bp
 from panel.routes.support import bp as support_bp, restrict_support_session
 from panel.routes.templates_api import bp as templates_api_bp
+from panel.routes.machine import bp as machine_bp
+from panel.routes.machine_admin import bp as machine_admin_bp
+from panel.services import machine_events  # noqa: F401 (transactional event listeners)
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(pages_bp)
@@ -3161,6 +3172,8 @@ app.register_blueprint(sms_gateway_events_bp)
 app.register_blueprint(templates_api_bp)
 app.register_blueprint(backups_bp)
 app.register_blueprint(doctor_bp)
+app.register_blueprint(machine_bp)
+app.register_blueprint(machine_admin_bp)
 
 
 
@@ -3606,6 +3619,7 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
                 return False, "Client not found", 404
 
         target_client['enable'] = bool(enable)
+        previous_comment = target_client.get('comment')
         # Manual enable/disable doubles as an SMS/WhatsApp opt-out switch: disabling
         # tags the comment with #nosms #nopm, enabling removes them. x-ui's own
         # auto-disable on expiry does NOT pass through here, so an expired account
@@ -3620,6 +3634,9 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
         if server_is_v3(server):
             ok, _vr, verr = v3_update_client(server, session_obj, email, target_client)
             if ok:
+                if machine_events.record_opt_out(server.id, target_client.get('id'),
+                                                 previous_comment, target_client.get('comment')):
+                    db.session.commit()
                 patch_cached_client(server.id, email, enable=bool(enable), comment=target_client.get('comment'))
                 if not enable:
                     _cancel_pending_sms_for_account(server.id, email, reason='client_disabled')
@@ -3663,6 +3680,9 @@ def _toggle_client_core(user, server, inbound_id: int, email: str, enable: bool)
                 if user.role == 'reseller' and price > 0:
                     user.credit -= price
                     log_transaction(user.id, -price, 'renew', description or f"Renew client {email}", server_id=server.id)
+                    db.session.commit()
+                if machine_events.record_opt_out(server.id, target_client.get('id'),
+                                                 previous_comment, target_client.get('comment')):
                     db.session.commit()
                 patch_cached_client(server.id, email, enable=bool(enable), comment=target_client.get('comment'))
                 if not enable:

@@ -1,0 +1,46 @@
+{
+  "public_key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+  "phone": [
+    {
+      "input": "0912 123 4567",
+      "normalized": "989121234567",
+      "digest": "4808498887425151e1075eb354754ba4edee0aea8057b70bb277c623b9881f67"
+    },
+    {
+      "input": "+98-912-123-4567",
+      "normalized": "989121234567",
+      "digest": "4808498887425151e1075eb354754ba4edee0aea8057b70bb277c623b9881f67"
+    },
+    {
+      "input": "۰۹۱۲۱۲۳۴۵۶۷",
+      "normalized": "989121234567",
+      "digest": "4808498887425151e1075eb354754ba4edee0aea8057b70bb277c623b9881f67"
+    },
+    {
+      "input": "٠٠٩٨٩١٢١٢٣٤٥٦٧",
+      "normalized": "989121234567",
+      "digest": "4808498887425151e1075eb354754ba4edee0aea8057b70bb277c623b9881f67"
+    }
+  ],
+  "response_fields": {
+    "envelope": ["schema_version", "source", "fetched_at"],
+    "customer": ["customer_id", "display_name", "primary_phone_masked", "telegram_masked", "status"],
+    "service": ["service_key", "customer_id", "client_email", "server_label", "status", "expires_at", "days_left", "quota", "lifecycle", "flags", "package", "owner_type", "reseller_id", "last_verified_renewal_at"],
+    "quota": ["total_gb", "used_gb", "remaining_gb", "unlimited"],
+    "lifecycle": ["generation", "state"],
+    "flags": ["nosms", "nopm"],
+    "renewal": ["operation_id", "days", "gb", "verified", "verified_at", "renewed_at"],
+    "payment": ["payment_id", "customer_id", "amount", "sender_card_hash", "masked_card", "recorded_at"],
+    "support_request": ["request_id", "customer_id", "channel", "status", "subject_masked", "created_at"],
+    "ownership_claim": ["claim_id", "customer_id", "service_key", "status", "evidence_kind", "phone_masked", "created_at"],
+    "knowledge": ["faqs", "renew_templates", "notification_templates", "online_chat_scripts"],
+    "notification": ["notification_id", "status", "state", "recipient_masked", "created_at"],
+    "proposal": ["proposal_id", "status"]
+  },
+  "webhook": {
+    "timestamp": "1795428000",
+    "delivery_id": "evt_test_vector",
+    "body": "{\"event_id\":\"evt_test_vector\",\"event_type\":\"eve.service.lifecycle_changed.v1\",\"occurred_at\":\"2026-11-23T10:00:00Z\",\"data\":{\"service_key\":\"eve:12:v1:sample-reference-for-contract-tests\",\"generation\":37,\"state\":\"expiring\"}}",
+    "signature": "v1=a4c989a087c5b33f5a94db0caed3a36159119924eb0129f910ad54e166c03538"
+  }
+}

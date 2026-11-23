@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+{% block title %}{{ 'اتصال GOD AI' if panel_lang == 'fa' else 'GOD AI Integration' }}{% endblock %}
+{% block content %}
+{% set fa = panel_lang == 'fa' %}
+<section class="stat-card">
+    <h2>{{ 'کلیدهای ماشینی GOD AI' if fa else 'GOD AI machine keys' }}</h2>
+    {% if error %}<p class="field-note field-note-warn">{{ 'نام، مجوزها و انقضای معتبر را وارد کنید.' if fa else 'Enter a valid name, scope selection and expiration.' }}</p>{% endif %}
+    {% if issued %}
+    <div class="form-group">
+        <label for="issued-machine-key">{{ 'کلید فقط در این پاسخ نمایش داده می‌شود' if fa else 'This key is shown once' }}</label>
+        <input id="issued-machine-key" dir="ltr" value="{{ issued }}" readonly autocomplete="off" spellcheck="false">
+    </div>
+    {% endif %}
+    <form method="post" autocomplete="off">
+        <input type="hidden" name="action" value="issue">
+        <div class="form-group"><label for="machine-name">{{ 'نام' if fa else 'Name' }}</label><input id="machine-name" name="name" maxlength="100" required></div>
+        <div class="form-group"><label for="machine-days">{{ 'انقضا (روز)' if fa else 'Expires in (days)' }}</label><input id="machine-days" name="days" type="number" min="1" max="90" value="90" required></div>
+        <fieldset class="checkbox-group">
+            <legend>{{ 'مجوزها' if fa else 'Scopes' }}</legend>
+            {% for scope in scopes %}
+            <label class="checkbox-label"><input type="checkbox" name="scopes" value="{{ scope }}"><span class="checkmark" aria-hidden="true"></span><span dir="ltr">{{ scope }}</span></label>
+            {% endfor %}
+        </fieldset>
+        <button class="btn btn-primary" type="submit">{{ 'ایجاد کلید' if fa else 'Create key' }}</button>
+    </form>
+    {% for key in keys %}
+    <p><strong>{{ key.name }}</strong> · {{ key.scopes|join(', ') }}</p>
+    <p class="field-note">{{ 'آخرین استفاده' if fa else 'Last used (UTC)' }} {{ key.last_used_at or '—' }} · {{ 'انقضا' if fa else 'Expires (UTC)' }} {{ key.expires_at }}</p>
+    {% if key.revoked_at %}
+    <span class="badge">{{ 'لغو شده' if fa else 'Revoked' }}</span>
+    {% else %}
+    <form method="post"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="{{ key.id }}"><button class="btn btn-danger" type="submit">{{ 'لغو کلید' if fa else 'Revoke key' }}</button></form>
+    {% endif %}
+    {% endfor %}
+</section>
+<section class="stat-card">
+    <h2>{{ 'پیشنهادها برای بررسی' if fa else 'Proposals for review' }}</h2>
+    {% for proposal in proposals %}
+    <details>
+        <summary>{{ proposal.id }} · {{ proposal.status }} · {{ proposal.created_at }}</summary>
+        <pre class="field-note">{{ format_json(proposal.payload) }}</pre>
+        {% if proposal.status == 'pending' %}
+        <form method="post">
+            <input type="hidden" name="id" value="{{ proposal.id }}">
+            <button class="btn btn-primary" name="action" value="approved">{{ 'ثبت تأیید' if fa else 'Record approval' }}</button>
+            <button class="btn btn-secondary" name="action" value="rejected">{{ 'ثبت رد' if fa else 'Record rejection' }}</button>
+        </form>
+        {% endif %}
+    </details>
+    {% else %}<p class="field-note">{{ 'پیشنهادی ثبت نشده است.' if fa else 'No proposals yet.' }}</p>
+    {% endfor %}
+</section>
+{% endblock %}

@@ -801,6 +801,7 @@ def edit_client(server_id, inbound_id, email):
         target_client['email'] = new_email
 
         # Comment can be edited by anyone
+        previous_comment = target_client.get('comment')
         if new_comment is not None:
             target_client['comment'] = new_comment
 
@@ -900,6 +901,10 @@ def edit_client(server_id, inbound_id, email):
                 return jsonify({"success": False, "error": f"{prefix} — {detail}"}), 400
 
         if success:
+            if new_comment is not None:
+                from panel.services.machine_events import record_opt_out
+                if record_opt_out(server_id, target_client.get('id'), previous_comment, new_comment):
+                    db.session.commit()
             # Update ownership if exists
             email_l = (email or '').strip().lower()
             ownerships = ClientOwnership.query.filter(
@@ -2294,7 +2299,8 @@ def renew_client(server_id, inbound_id, email, *, order_quote=None):
         # Renew = active customer again → strip the #nosms/#nopm opt-out tags that
         # the disable flow added, so automation messaging resumes (mirrors the
         # manual enable toggle). No-op when the comment has no such tags.
-        target_client['comment'] = _toggle_optout_tags(target_client.get('comment'), add=False)
+        previous_opt_out_comment = target_client.get('comment')
+        target_client['comment'] = _toggle_optout_tags(previous_opt_out_comment, add=False)
 
         client_id = target_client.get('id', target_client.get('password', email))
 
@@ -3186,6 +3192,9 @@ def renew_client(server_id, inbound_id, email, *, order_quote=None):
                             previous_expiry_ms=_previous_expiry_ms,
                             new_expiry_ms=int(new_expiry or 0),
                         )
+                        from panel.services.machine_events import record_opt_out
+                        record_opt_out(server_id, target_client.get('id'), previous_opt_out_comment,
+                                       target_client.get('comment'))
                     except Exception:
                         renewal_event = None
                         app.logger.warning(
@@ -3256,6 +3265,7 @@ def renew_client(server_id, inbound_id, email, *, order_quote=None):
                     event_type='renewal',
                     operation_id=operation_key,
                     correlation_id=renewal_trace_id,
+                    observed_state=(verify.get('observed') or {}).get('service_state'),
                 )
                 if _activation_ready:
                     # The SMS itself is fired further below, once the durable business

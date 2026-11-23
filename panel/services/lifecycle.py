@@ -531,7 +531,7 @@ def _outbox_row_for_event(event_id: str):
 def handle_successful_service_lifecycle_change(
         *, server_id, client_uuid=None, client_email=None, event_type='renewal',
         operation_id=None, correlation_id=None, reason=None, event_id=None,
-        invalidate_kinds=None, commit=True, dispatch=True):
+        invalidate_kinds=None, commit=True, dispatch=True, observed_state=None):
     """The one place every successful renewal/extension must call.
 
     Contract:
@@ -590,6 +590,7 @@ def handle_successful_service_lifecycle_change(
         )
         if change_type == 'renewal':
             state.last_renewed_at = now
+        state.observed_state_for_machine_event = observed_state
         generation = int(state.generation or 0)
         ev_id = str(event_id or lifecycle_event_id(service_key, generation, operation_id))[:128]
 

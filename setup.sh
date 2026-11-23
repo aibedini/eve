@@ -1791,6 +1791,7 @@ server {
         proxy_set_header Connection '';
     }
 
+    location ^~ /machine/ { access_log off; return 404; }
     location / {
         proxy_pass http://127.0.0.1:${APP_PORT};
         proxy_set_header Host \$host;
@@ -1910,6 +1911,7 @@ server {
         proxy_set_header Connection '';
     }
 
+    location ^~ /machine/ { access_log off; return 404; }
     location / {
         proxy_pass http://127.0.0.1:${APP_PORT};
         proxy_set_header Host \$host;
@@ -1982,6 +1984,7 @@ server {
         proxy_set_header Connection '';
     }
 
+    location ^~ /machine/ { access_log off; return 404; }
     location / {
         proxy_pass http://127.0.0.1:${APP_PORT};
         proxy_set_header Host \$host;
