@@ -361,6 +361,81 @@ class BackupTransportTests(unittest.TestCase):
         return SimpleNamespace(id=1, host=host, allow_insecure=allow_insecure,
                                panel_type="auto", name="s")
 
+    def test_native_backup_accepts_sqlite_and_postgres_independent_of_filename(self):
+        for payload, expected_ext in (
+            (b'SQLite format 3\x00' + bytes(100), '.db'),
+            (b'PGDMP' + bytes(64), '.dump'),
+        ):
+            with self.subTest(expected_ext=expected_ext):
+                response = SimpleNamespace(status_code=200, content=payload, headers={
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Disposition': 'attachment; filename=misleading.db',
+                })
+                server = self._server('https://example.net/custom-path', False)
+                session = _RecordingSession(response)
+                self.assertEqual(backup_service._fetch_xui_backup(session, server),
+                                 (payload, expected_ext, None))
+                method, url, options = session.calls[0]
+                self.assertEqual((method, url), ('GET', 'https://example.net/custom-path/panel/api/server/getDb'))
+                self.assertFalse(options['allow_redirects'])
+                self.assertEqual(len(session.calls), 1)
+
+    def test_html_error_cannot_be_forwarded_as_a_backup(self):
+        response = SimpleNamespace(status_code=200, content=b'<html>Sign in</html>',
+                                   headers={'Content-Type': 'application/octet-stream'})
+        server = self._server('https://example.net', False)
+        payload, ext, error = backup_service._fetch_xui_backup(_RecordingSession(response), server)
+        self.assertIsNone(payload)
+        self.assertIsNone(ext)
+        self.assertIn('Unrecognized backup format', error)
+
+    def test_native_backup_falls_back_to_legacy_endpoint(self):
+        server = self._server('https://example.net', False)
+        payload = b'SQLite format 3\x00' + bytes(100)
+        session = mock.Mock()
+        session.get.side_effect = [
+            _FakeBackupResponse(),
+            SimpleNamespace(status_code=200, content=payload, headers={}),
+        ]
+        self.assertEqual(backup_service._fetch_xui_backup(session, server), (payload, '.db', None))
+        self.assertEqual(session.get.call_args.args[0], 'https://example.net/server/getDb')
+        session.post.assert_not_called()
+
+    def test_legacy_sanaei_status_uses_post_when_get_is_missing(self):
+        from panel.adapters.xui import fetch_server_status
+
+        session = mock.Mock(verify=True)
+        session.get.return_value = _FakeBackupResponse()
+        session.post.return_value = mock.Mock(status_code=200, json=lambda: {
+            'success': True, 'obj': {'cpu': 10},
+        })
+        _, error, detected = fetch_server_status(session, 'https://example.net/custom-path', 'sanaei')
+        self.assertIsNone(error)
+        self.assertEqual(detected, 'sanaei')
+        self.assertEqual(session.post.call_args.args[0], 'https://example.net/custom-path/server/status')
+
+    def test_legacy_sanaei_reads_nested_inbound_routes(self):
+        from panel.adapters import xui
+
+        server = self._server('https://example.net/custom-path', False)
+        server.panel_type = 'sanaei'
+        legacy_base = server.host + '/panel/api/inbounds/inbound'
+        session = mock.Mock(verify=True)
+        session.get.return_value = _FakeBackupResponse()
+
+        def post(url, **kwargs):
+            for path, result in (('/list', [{'id': 7}]), ('/onlines', ['client'])):
+                if url == legacy_base + path:
+                    return mock.Mock(status_code=200, content=b'{}',
+                                     json=lambda: {'success': True, 'obj': result})
+            return _FakeBackupResponse()
+
+        session.post.side_effect = post
+        self.assertEqual(xui.fetch_inbounds(session, server.host, server.panel_type, force_fresh=True),
+                         ([{'id': 7}], None, 'sanaei'))
+        with mock.patch.object(xui, 'XUI_LEGACY_PROBE_CACHE', {}):
+            self.assertEqual(xui.probe_legacy_inbound_api(server, session, force=True), 'SUPPORTED')
+
     def test_backup_is_refused_for_plaintext_without_the_opt_in(self):
         server = self._server("http://31.14.115.171:2053", False)
         session = _RecordingSession()

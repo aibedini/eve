@@ -18,10 +18,12 @@ PACKAGES = (ROOT / "panel" / "routes" / "packages.py").read_text(encoding="utf-8
 
 class RenewalRecoveryContractTests(unittest.TestCase):
     def test_warm_package_cache_coalesces_requests_and_revalidates(self):
-        self.assertIn("renewPackageCache.inflight", DASHBOARD)
-        self.assertIn("If-None-Match", DASHBOARD)
-        self.assertIn("res.status === 304", DASHBOARD)
-        self.assertNotIn("/api/packages?purpose=renew&_=${Date.now()}", DASHBOARD)
+        loader = DASHBOARD.split("async function loadPanelPackages(", 1)[1].split("function selectRenewPackage(", 1)[0]
+        self.assertEqual(DASHBOARD.count("return loadPanelPackages({"), 2)
+        self.assertIn("if (!entry.inflight)", loader)
+        self.assertIn("If-None-Match", loader)
+        self.assertIn("res.status !== 304", loader)
+        self.assertNotIn("Date.now()", loader.split("await fetch(", 1)[1].split(";", 1)[0])
 
     def test_package_response_is_private_and_revisioned(self):
         self.assertIn("private, max-age=60, stale-while-revalidate=120", PACKAGES)

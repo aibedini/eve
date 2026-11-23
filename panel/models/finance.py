@@ -236,6 +236,31 @@ class ClientOperation(db.Model):
     server = db.relationship('Server')
     transaction = db.relationship('Transaction')
 
+class ClientMutationJob(db.Model):
+    """The dashboard's durable queue for individual client operations."""
+    __tablename__ = 'client_mutation_jobs'
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(64), nullable=False)
+    admin_id = db.Column(db.Integer, nullable=False)
+    admin_created_at = db.Column(db.DateTime)
+    server_id = db.Column(db.Integer, nullable=False)
+    scope = db.Column(db.String(64), nullable=False)
+    target_scope = db.Column(db.String(64), nullable=False)
+    action = db.Column(db.String(12), nullable=False)
+    email = db.Column(db.String(255), nullable=False)
+    request_hash = db.Column(db.String(64), nullable=False)
+    state = db.Column(db.String(12), nullable=False)
+    ready_at = db.Column(db.DateTime, nullable=False)
+    request_data = db.Column(EncryptedText('finance'))
+    result_data = db.Column(EncryptedText('finance'))
+
+    __table_args__ = (
+        db.UniqueConstraint('admin_id', 'public_id', name='uq_client_mutation_job_admin_public'),
+        db.Index('ix_client_mutation_jobs_ready', 'state', 'ready_at', 'id'),
+        db.Index('ix_client_mutation_jobs_server', 'server_id', 'state', 'id'),
+    )
+
+
 class CustomerAccount(db.Model):
     """Channel-independent identity for an end customer."""
     __tablename__ = 'customer_accounts'

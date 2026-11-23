@@ -598,9 +598,7 @@
     let renewCustomPriceRequestSeq = 0;
     let addCustomQuote = null;
     let renewCustomQuote = null;
-    const BASE_COST_DAY = EVE_DASHBOARD.BASE_COST_DAY;
     const BASE_COST_GB = EVE_DASHBOARD.BASE_COST_GB;
-    const BASE_COST_DAY_UNLIMITED = EVE_DASHBOARD.BASE_COST_DAY_UNLIMITED;
 
     function showDashboardSkeleton(count = 3) {
         const container = document.getElementById('inbounds-container');
@@ -3277,9 +3275,115 @@
         }
     }
 
+    function clientJobId() {
+        return crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+
+    const clientJobs = new Map();
+    function renderClientJobs() {
+        const status = document.getElementById('client-job-status');
+        if (!status) return;
+        const counts = {queued: 0, running: 0};
+        const rows = [];
+        for (const job of clientJobs.values()) {
+            counts[job.state]++;
+            const row = document.createElement('li');
+            row.textContent = job.state === 'queued'
+                ? _t('{email} is queued', {email: job.email})
+                : _t('{email} is running', {email: job.email});
+            rows.push(row);
+        }
+        document.getElementById('client-job-counts').textContent =
+            _t('Account operations: {queued} queued, {running} running', counts);
+        document.getElementById('client-job-list').replaceChildren(...rows);
+        status.classList.toggle('hidden', clientJobs.size === 0);
+    }
+
+    async function watchClientJob(id, state, email) {
+        clientJobs.set(id, {email, state: state === 'running' ? 'running' : 'queued'});
+        renderClientJobs();
+        let delay = 350;
+        try {
+            for (;;) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+                let response;
+                let job;
+                try {
+                    response = await fetch(`/api/client-jobs/${encodeURIComponent(id)}`, {cache: 'no-store'});
+                    job = await response.json();
+                } catch (_) {
+                    delay = 5000;
+                    continue;
+                }
+                if ([401, 403, 404].includes(response.status)) {
+                    throw new Error(_t('Account operation status is unavailable.'));
+                }
+                if (!response.ok) {
+                    delay = 5000;
+                    continue;
+                }
+                if (job.state === 'done' && job.result) {
+                    return new Response(JSON.stringify(job.result.body), {status: 200,
+                        headers: {'Content-Type': 'application/json', 'X-Eve-Status': job.result.status}});
+                }
+                if (job.state === 'uncertain') {
+                    return new Response(JSON.stringify({success: false, code: 'client_job_uncertain',
+                        error: _t('The operation was interrupted. Check the account before trying again.')}));
+                }
+                if (clientJobs.get(id)?.state !== job.state) {
+                    clientJobs.set(id, {email, state: job.state});
+                    renderClientJobs();
+                }
+                delay = Math.min(4000, delay * 1.5);
+            }
+        } finally {
+            clientJobs.delete(id);
+            renderClientJobs();
+        }
+    }
+
+    async function submitClientJob(url, payload, id, email, accepted) {
+        const options = {method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-Eve-Client-Job': id},
+            body: JSON.stringify(payload)};
+        let response;
+        try {
+            response = await fetch(url, options);
+        } catch (_) {
+            // A lost acknowledgement can be retried with the same durable ID.
+            response = await fetch(url, options);
+        }
+        if (response.status !== 202) return response;
+        const job = await response.json();
+        accepted();
+        showToast(_t('Account operation queued for {email}', {email}));
+        return watchClientJob(job.job_id, job.state, email);
+    }
+
+    async function resumeClientJobs() {
+        try {
+            const response = await fetch('/api/client-jobs', {cache: 'no-store'});
+            if (!response.ok) return;
+            const {jobs} = await response.json();
+            for (const job of jobs) {
+                if (clientJobs.has(job.job_id)) continue;
+                watchClientJob(job.job_id, job.state, job.email).then(async result => {
+                    const data = await result.json();
+                    if (data.success) {
+                        showToast(_t('Account operation completed for {email}', {email: job.email}));
+                        queueSilentServerRefresh(job.server_id);
+                    } else {
+                        showToast(data.error || _t('Account operation status is unavailable.'), 'error');
+                    }
+                }).catch(error => showToast(error.message, 'error'));
+            }
+        } catch (_) { /* A later page load can recover accepted jobs. */ }
+    }
+    setTimeout(resumeClientJobs, 0);
+
     function openRenewModal(serverId, inboundId, email, volumeStatus, remainingFormatted, totalFormatted, expiryType, expiryText, expiryTimestamp) {
-        window._renewOperationId = crypto.randomUUID
-            ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+        window._renewOperationId = clientJobId();
+        document.querySelector('#renew-modal .btn-primary').disabled = false;
         document.getElementById('renew-server-id').value = serverId;
         document.getElementById('renew-inbound-id').value = inboundId;
         document.getElementById('renew-email').value = email;
@@ -3369,7 +3473,7 @@
         selectedRenewPackageDays = 0;
         selectedRenewPackageVolume = 0;
         selectedRenewPackageName = '';
-        loadRenewPackages({ force: true });
+        loadRenewPackages();
         calculateRenewCustomPrice();
         document.getElementById('renew-modal').classList.remove('hidden');
     }
@@ -4338,6 +4442,8 @@
     // renew-result-modal:end
 
     async function submitRenewal() {
+        const btn = document.querySelector('#renew-modal .btn-primary');
+        if (btn.disabled) return;
         const serverId = document.getElementById('renew-server-id').value;
         const inboundId = document.getElementById('renew-inbound-id').value;
         const email = document.getElementById('renew-email').value;
@@ -4357,8 +4463,7 @@
             sender_card: senderCard,
             card_id: destCardId ? parseInt(destCardId) : null,
             gift_volume_gb: giftGb > 0 ? giftGb : 0,
-            operation_id: window._renewOperationId || (window._renewOperationId =
-                (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`)),
+            operation_id: window._renewOperationId || (window._renewOperationId = clientJobId()),
         };
 
         if (usePackage) {
@@ -4382,23 +4487,22 @@
             return showToast(_t('Review the updated price before confirming.'), 'error');
         }
 
-        const btn = document.querySelector('#renew-modal .btn-primary');
-        const originalText = btn.innerText;
         const finalDays = usePackage ? selectedRenewPackageDays : payload.days;
         const finalVolume = usePackage ? selectedRenewPackageVolume
             : Object.prototype.hasOwnProperty.call(payload, 'volume') ? payload.volume : null;
         const operationId = payload.operation_id;
+        const isCurrent = () => window._renewOperationId === operationId;
+        const beforeExpiryText = currentClientExpiryText;
         btn.disabled = true;
-        closeRenewModal();
         window.EveRenewals.begin({operation_id:operationId, server_id:serverId,
-            inbound_id:inboundId, email, days:finalDays, volume_gb:finalVolume});
+            inbound_id:inboundId, email, days:finalDays, volume_gb:finalVolume}, {showResult: false});
 
         try {
-            const response = await fetch(`/api/client/${serverId}/${inboundId}/${encodeURIComponent(email)}/renew`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            const response = await submitClientJob(
+                `/api/client/${serverId}/${inboundId}/${encodeURIComponent(email)}/renew`,
+                payload, operationId, email, () => {
+                    if (isCurrent()) closeRenewModal();
+                });
             
             let data = null;
             try {
@@ -4409,13 +4513,25 @@
                 const preview = rawText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
                 data = { success: false, error: _t('Server error (HTTP {v1}){v2}', {v1: response.status, v2: preview ? ': ' + preview : ''}) };
             }
+            if (!isCurrent() || document.querySelector('#add-client-modal:not(.hidden), #edit-client-modal:not(.hidden)')) {
+                if (data.success) applyClientMutation(data, {serverId, inboundId, email});
+                const localFailure = !data.success && !data.final_state && !data.verify;
+                window.EveRenewals.accept(Object.assign({}, data, {operation_id: operationId, localFailure}),
+                    {serverId, inboundId, email, operationId});
+                if (data.success) {
+                    updateWalletDisplay(data.remaining_credit);
+                    queueSilentServerRefresh(serverId);
+                    showToast(_t('Account operation completed for {email}', {email}));
+                }
+                else if (data.error) showToast(data.error, 'error');
+                return;
+            }
             if (data.success) {
-                window._resetOperationId = null;
-                if (window._renewOperationId === operationId) window._renewOperationId = null;
+                closeRenewModal();
 
                 _renderRenewPrevState(email);
                 const beforeExpiry = document.createElement('span');
-                beforeExpiry.textContent = _t(' · Before: {v1}', {v1: currentClientExpiryText || 'Not reported'});
+                beforeExpiry.textContent = _t(' · Before: {v1}', {v1: beforeExpiryText || 'Not reported'});
                 document.getElementById('renew-prev-state').appendChild(beforeExpiry);
 
                 // Track the operation's facts for "Re-check" (the modal is rendered
@@ -4509,6 +4625,8 @@
                 window.EveRenewals.accept(Object.assign({}, data, {operation_id: operationId,
                     localFailure: true, final_state: 'NOT_APPLIED'}), {serverId, inboundId, email, operationId});
                 document.getElementById('renew-modal').classList.remove('hidden');
+                btn.disabled = false;
+                window._renewOperationId = clientJobId();
                 if (usePackage) loadRenewPackages({force: true});
                 else calculateRenewCustomPrice();
                 showToast(_t('Review the updated price before confirming.'), 'error');
@@ -4543,7 +4661,7 @@
         } catch (error) {
             // The POST may have reached EVE and the panel even though its response was
             // lost. Keep the same operation id and recover with read-only verification.
-            showRenewInProgress(serverId, inboundId, email, {
+            if (isCurrent()) showRenewInProgress(serverId, inboundId, email, {
                 operation_id: payload.operation_id,
                 note: 'Transport interrupted. Checking the existing renewal…',
                 awaiting_original_request: true
@@ -4552,8 +4670,7 @@
             observeRenewalOperation();
         } finally {
             window.EveRenewals.finish(operationId);
-            btn.disabled = false;
-            btn.innerText = originalText;
+            if (isCurrent()) btn.disabled = false;
         }
     }
 
@@ -4569,8 +4686,10 @@
     let allServers = [];
 
     function openAddClientModal() {
-        window._addClientOperationId = crypto.randomUUID
-            ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+        window._addClientOperationId = clientJobId();
+        const addButton = document.querySelector('#add-client-modal .btn-primary');
+        addButton.disabled = false;
+        if (addButton.dataset.originalText) addButton.innerText = addButton.dataset.originalText;
         document.getElementById('add-client-server-select').innerHTML = '<option value="">' + _t('-- Select Server --') + '</option>';
         const _inbSel = document.getElementById('add-client-inbound-select');
         _inbSel.innerHTML = '<option value="">' + _t('-- Select Inbound --') + '</option>';
@@ -4676,49 +4795,47 @@
             : (Number(packageRow.price) || 0).toLocaleString() + ' T';
     }
 
-    async function loadPackages() {
+    function loadPackages(force = false) {
         const container = document.getElementById('packages-list');
         if (!container) return;
         const serverId = document.getElementById('add-client-server-select').value;
         const resellerId = document.getElementById('add-pricing-reseller')?.value || '';
-        container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">' + _t('Loading packages...') + '</div>';
-        try {
-            const params = new URLSearchParams({purpose: 'create', server_id: serverId, reseller_id: resellerId, _: Date.now()});
-            const res = await fetch(`/api/packages?${params}`, { cache: 'no-store' });
-            const pkgs = await res.json();
-            if (document.getElementById('add-client-server-select').value !== serverId ||
-                (document.getElementById('add-pricing-reseller')?.value || '') !== resellerId) return;
-            
-            if (!Array.isArray(pkgs) || pkgs.length === 0) {
-                container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">' + _t('No packages defined') + '</div>';
-                selectedPackageId = null;
-                return;
-            }
+        return loadPanelPackages({
+            container, force,
+            params: {purpose: 'create', server_id: serverId, reseller_id: resellerId},
+            key: ['create', serverId, resellerId],
+            isCurrent: () => document.getElementById('add-client-server-select').value === serverId &&
+                (document.getElementById('add-pricing-reseller')?.value || '') === resellerId,
+            render: (pkgs) => renderCreatePackages(container, pkgs),
+            clearSelection: () => { selectedPackageId = null; },
+        });
+    }
 
-            container.innerHTML = pkgs.map(p => `
+    function renderCreatePackages(container, pkgs) {
+        if (pkgs.length === 0) {
+            container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">' + _t('No packages defined') + '</div>';
+            selectedPackageId = null;
+            updateAddPriceDisplay();
+            return;
+        }
+
+        container.innerHTML = pkgs.map(p => `
                 <div class="pkg-card" data-package-id="${Number(p.id) || 0}" data-package-price="${Number(p.price) || 0}" data-quote-revision="${escapePackageAttr(p.quote_revision || '')}" data-quota-mib="${Number(p.quota_mib) || 0}" data-onclick="selectPackage(this, ${Number(p.id) || 0}, ${Number(p.price) || 0})"
                      style="border: 1px solid var(--border-color); padding: 8px; border-radius: 6px; cursor: pointer; transition: 0.2s; background: var(--bg-dark); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 60px;">
                     ${renderPackageTitle(p.name)}
                     <div style="color: #4ade80; font-weight: bold; font-size: 0.8rem;">${packageChargeText(p)}</div>
                 </div>
-            `).join('');
+        `).join('');
 
-            if (selectedPackageId) {
-                const active = container.querySelector(`[data-package-id="${selectedPackageId}"]`);
-                if (active) {
-                    active.style.borderColor = 'var(--primary)';
-                    active.style.backgroundColor = 'rgba(99, 102, 241, 0.1)';
-                } else {
-                    selectedPackageId = null;
-                    calculateCustomPrice();
-                }
-                updateAddPriceDisplay();
+        if (selectedPackageId) {
+            const active = container.querySelector(`[data-package-id="${selectedPackageId}"]`);
+            if (active) {
+                active.style.borderColor = 'var(--primary)';
+                active.style.backgroundColor = 'rgba(99, 102, 241, 0.1)';
+            } else {
+                selectedPackageId = null;
             }
-        } catch (e) {
-            if (document.getElementById('add-client-server-select').value !== serverId ||
-                (document.getElementById('add-pricing-reseller')?.value || '') !== resellerId) return;
-            container.innerHTML = '<div style="grid-column: span 2; color: var(--danger); text-align: center;">' + _t('Error loading packages') + '</div>';
-            selectedPackageId = null;
+            updateAddPriceDisplay();
         }
     }
 
@@ -4746,8 +4863,7 @@
         if (!target) return;
         const freeEl = document.getElementById('renew-payable-free');
 
-        const normalized = Number(amount) || 0;
-        target.textContent = pricingCostText(normalized, selectedRenewPackageId ?
+        target.textContent = pricingCostText(amount, selectedRenewPackageId ?
             getPackageCard('#renew-packages-list', selectedRenewPackageId)?.dataset.quotaMib : renewCustomQuote?.quota_mib,
             'renew-payable-unit');
 
@@ -4763,15 +4879,16 @@
         }
     }
 
-    const RENEW_PACKAGE_TTL_MS = 90000;
-    const renewPackageCaches = new Map();
+    const PACKAGE_CACHE_TTL_MS = 60000;
+    const packageCaches = new Map();
 
-    function renderRenewPackages(pkgs, options = {}) {
+    function renderRenewPackages(pkgs) {
         const container = document.getElementById('renew-packages-list');
         if (!container) return;
-        if (!Array.isArray(pkgs) || pkgs.length === 0) {
+        if (pkgs.length === 0) {
             container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 15px; color: var(--text-secondary);">' + _t('No packages defined.') + '</div>';
             selectedRenewPackageId = null;
+            refreshRenewPriceDisplay();
             return;
         }
 
@@ -4788,84 +4905,85 @@
             if (active) {
                 active.style.borderColor = 'var(--primary)';
                 active.style.backgroundColor = 'rgba(99, 102, 241, 0.1)';
-            refreshRenewPriceDisplay();
-        } else if (selectedRenewPackageId) {
-            selectedRenewPackageId = null;
-            calculateRenewCustomPrice();
+            } else {
+                selectedRenewPackageId = null;
             }
             refreshRenewPriceDisplay();
         }
-        container.classList.toggle('renew-packages-stale', Boolean(options.stale));
-        container.title = options.stale ? 'Showing cached packages while prices refresh' : '';
     }
 
-    async function loadRenewPackages(options = {}) {
+    function loadRenewPackages({force = false} = {}) {
         const container = document.getElementById('renew-packages-list');
         if (!container) return;
         const serverId = document.getElementById('renew-server-id').value;
+        if (!serverId) return;
         const email = document.getElementById('renew-email')?.value || '';
         const inboundId = document.getElementById('renew-inbound-id')?.value || '';
-        const cacheKey = JSON.stringify([serverId, inboundId, USER_ROLE === 'reseller' ? '' : email]);
-        if (!renewPackageCaches.has(cacheKey)) {
-            if (renewPackageCaches.size >= 32) renewPackageCaches.delete(renewPackageCaches.keys().next().value);
-            renewPackageCaches.set(cacheKey, {items: null, etag: '', fetchedAt: 0, inflight: null});
-        }
-        const renewPackageCache = renewPackageCaches.get(cacheKey);
-        const render = (items, settings) => {
-            if (document.getElementById('renew-server-id').value === serverId &&
+        return loadPanelPackages({
+            container, force,
+            params: {purpose: 'renew', server_id: serverId, inbound_id: inboundId, email},
+            key: USER_ROLE === 'reseller' ? ['renew', serverId] : ['renew', serverId, inboundId, email],
+            isCurrent: () => document.getElementById('renew-server-id').value === serverId &&
                 (document.getElementById('renew-email')?.value || '') === email &&
-                (document.getElementById('renew-inbound-id')?.value || '') === inboundId) {
-                renderRenewPackages(items, settings);
-            }
+                (document.getElementById('renew-inbound-id')?.value || '') === inboundId,
+            render: renderRenewPackages,
+            clearSelection: () => { selectedRenewPackageId = null; },
+        });
+    }
+
+    async function loadPanelPackages({container, force, params, key, isCurrent, render, clearSelection}) {
+        const cacheKey = JSON.stringify(key);
+        if (!packageCaches.has(cacheKey)) {
+            if (packageCaches.size >= 32) packageCaches.delete(packageCaches.keys().next().value);
+            packageCaches.set(cacheKey, {items: null, etag: '', fetchedAt: 0, inflight: null});
+        }
+        const entry = packageCaches.get(cacheKey);
+        const paint = (items, stale = false) => {
+            if (!isCurrent()) return;
+            render(items);
+            container.title = stale ? _t('Showing cached packages while prices refresh') : '';
         };
-        const now = Date.now();
-        const hasCache = Array.isArray(renewPackageCache.items);
-        const fresh = hasCache && (now - renewPackageCache.fetchedAt) < RENEW_PACKAGE_TTL_MS;
-        if (hasCache) render(renewPackageCache.items, { stale: !fresh });
-        if (fresh && !options.force) return renewPackageCache.items;
-        if (renewPackageCache.inflight) return renewPackageCache.inflight;
-        if (!hasCache) {
+        const hasCache = Array.isArray(entry.items);
+        const fresh = hasCache && Date.now() - entry.fetchedAt < PACKAGE_CACHE_TTL_MS;
+        if (hasCache) paint(entry.items, !fresh || force);
+        if (fresh && !force) return entry.items;
+        if (!hasCache && isCurrent()) {
+            container.title = '';
             container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">' + _t('Loading packages...') + '</div>';
         }
-        renewPackageCache.inflight = (async () => {
-            const headers = {};
-            if (renewPackageCache.etag) headers['If-None-Match'] = renewPackageCache.etag;
-            const params = new URLSearchParams({purpose: 'renew', server_id: serverId, inbound_id: inboundId, email});
-            const res = await fetch(`/api/packages?${params}`, { headers, cache: 'no-cache' });
-            if (res.status === 304) {
-                renewPackageCache.fetchedAt = Date.now();
-                render(renewPackageCache.items);
-                return renewPackageCache.items;
-            }
-            if (!res.ok) throw new Error(_t('HTTP {v1}', {v1: res.status}));
-            const pkgs = await res.json();
-            if (!Array.isArray(pkgs)) throw new Error(_t('Invalid package response'));
-            renewPackageCache.items = pkgs;
-            renewPackageCache.etag = res.headers.get('ETag') || '';
-            renewPackageCache.fetchedAt = Date.now();
-            render(pkgs);
-            return pkgs;
-        })();
+        if (!entry.inflight) {
+            entry.inflight = (async () => {
+                const headers = entry.etag ? {'If-None-Match': entry.etag} : {};
+                const res = await fetch(`/api/packages?${new URLSearchParams(params)}`, {headers, cache: 'no-cache'});
+                if (res.status !== 304) {
+                    if (!res.ok) throw new Error(_t('HTTP {v1}', {v1: res.status}));
+                    const items = await res.json();
+                    if (!Array.isArray(items)) throw new Error(_t('Invalid package response'));
+                    entry.items = items;
+                    entry.etag = res.headers.get('ETag') || '';
+                }
+                entry.fetchedAt = Date.now();
+                return entry.items;
+            })().finally(() => { entry.inflight = null; });
+        }
         try {
-            return await renewPackageCache.inflight;
-        } catch (e) {
-            if (document.getElementById('renew-server-id').value !== serverId) return null;
+            const items = await entry.inflight;
+            paint(items);
+            return items;
+        } catch (_) {
+            if (!isCurrent()) return null;
             if (hasCache) {
-                render(renewPackageCache.items, { stale: true });
+                paint(entry.items, true);
                 showToast(_t('Package refresh failed; cached prices are shown.'), 'error');
-                return renewPackageCache.items;
+                return entry.items;
             }
             container.innerHTML = '<div style="grid-column: span 2; color: var(--danger); text-align: center;">' + _t('Error loading packages') + '</div>';
-            selectedRenewPackageId = null;
+            clearSelection();
             return null;
-        } finally {
-            renewPackageCache.inflight = null;
         }
     }
 
-    // Warm the scoped cache once the dashboard has settled; opening Renew then paints
-    // immediately, while ETag revalidation remains authoritative in the background.
-    setTimeout(() => loadRenewPackages({ preload: true }), 0);
+    setTimeout(() => loadPackages(), 0);
 
     function selectRenewPackage(el, id, price, days, volume, name) {
         const alreadySelected = selectedRenewPackageId === id;
@@ -4892,15 +5010,6 @@
         refreshRenewPriceDisplay(price);
     }
 
-    function computeRenewCustomPrice() {
-        let days = parseFloat(document.getElementById('renew-custom-days').value) || 0;
-        let vol = parseFloat(document.getElementById('renew-custom-volume').value) || 0;
-        if (days < 0) days = 0;
-        if (vol < 0) vol = 0;
-        const daysCost = days === 0 ? BASE_COST_DAY_UNLIMITED : days * BASE_COST_DAY;
-        return daysCost + (vol * BASE_COST_GB);
-    }
-
     async function fetchCustomDynamicPrice(days, volume, serverId, context) {
         const params = new URLSearchParams({
             days: String(Math.max(0, parseFloat(days || 0))),
@@ -4919,18 +5028,17 @@
         let vol = parseFloat(document.getElementById('renew-custom-volume').value) || 0;
         if (days < 0) days = 0;
         if (vol < 0) vol = 0;
-        const total = computeRenewCustomPrice();
-        const costDisplay = document.getElementById('renew-price-display');
-        if (costDisplay) costDisplay.innerText = total.toLocaleString();
-        refreshRenewPriceDisplay(total);
         const seq = ++renewCustomPriceRequestSeq;
         renewCustomQuote = null;
+        const costDisplay = document.getElementById('renew-price-display');
+        if (costDisplay) costDisplay.textContent = pricingCostText(null, 0, 'renew-quote-unit');
+        refreshRenewPriceDisplay();
         const serverId = document.getElementById('renew-server-id')?.value || '';
         const email = document.getElementById('renew-email')?.value || '';
         const inbound_id = document.getElementById('renew-inbound-id')?.value || '';
         const unlimited = vol === 0 && document.getElementById('renew-custom-volume').value.trim() !== '';
         fetchCustomDynamicPrice(days, vol, serverId, {purpose:'renew', email, inbound_id, unlimited: unlimited ? '1' : '0'}).then(quote => {
-            if (seq !== renewCustomPriceRequestSeq || selectedRenewPackageId) return;
+            if (seq !== renewCustomPriceRequestSeq) return;
             renewCustomQuote = quote;
             if (costDisplay) costDisplay.textContent = pricingCostText(quote.min_price, quote.quota_mib, 'renew-quote-unit');
             refreshRenewPriceDisplay(Number(quote.min_price));
@@ -4944,17 +5052,8 @@
         } else if (typeof prefetchedAmount === 'number') {
             updateRenewPriceDisplay(prefetchedAmount);
         } else {
-            updateRenewPriceDisplay(computeRenewCustomPrice());
+            updateRenewPriceDisplay(renewCustomQuote?.min_price);
         }
-    }
-
-    function computeAddCustomPrice() {
-        let days = parseInt(document.getElementById('custom-days').value) || 0;
-        let vol = parseInt(document.getElementById('custom-volume').value) || 0;
-        if (days < 0) days = 0;
-        if (vol < 0) vol = 0;
-        const daysCost = days === 0 ? BASE_COST_DAY_UNLIMITED : days * BASE_COST_DAY;
-        return daysCost + (vol * BASE_COST_GB);
     }
 
     function calculateCustomPrice() {
@@ -4962,18 +5061,15 @@
         let vol = parseInt(document.getElementById('custom-volume').value) || 0;
         if (days < 0) days = 0;
         if (vol < 0) vol = 0;
-        const total = computeAddCustomPrice();
-        const preview = document.getElementById('custom-price-display');
-        if (preview) preview.innerText = total.toLocaleString();
-        if (!selectedPackageId) {
-            updateAddPriceDisplay(total);
-        }
         const seq = ++addCustomPriceRequestSeq;
         addCustomQuote = null;
+        const preview = document.getElementById('custom-price-display');
+        if (preview) preview.textContent = pricingCostText(null, 0, 'add-quote-unit');
+        updateAddPriceDisplay();
         const serverId = document.getElementById('add-client-server-select')?.value || '';
         const reseller_id = document.getElementById('add-pricing-reseller')?.value || '';
         fetchCustomDynamicPrice(days, vol, serverId, {purpose:'create', reseller_id, unlimited: vol === 0 ? '1' : '0'}).then(quote => {
-            if (seq !== addCustomPriceRequestSeq || selectedPackageId) return;
+            if (seq !== addCustomPriceRequestSeq) return;
             addCustomQuote = quote;
             if (preview) preview.textContent = pricingCostText(quote.min_price, quote.quota_mib, 'add-quote-unit');
             updateAddPriceDisplay(Number(quote.min_price));
@@ -4995,7 +5091,7 @@
         const quota = Number(quotaMib || 0);
         const unit = document.getElementById(unitId);
         if (unit) unit.textContent = quota ? 'GB' : 'T';
-        return (quota ? quota / 1024 : Number(amount) || 0).toLocaleString();
+        return amount == null ? '—' : (quota ? quota / 1024 : Number(amount) || 0).toLocaleString();
     }
 
     function updateAddPriceDisplay(prefetchedAmount) {
@@ -5008,11 +5104,10 @@
         } else if (typeof prefetchedAmount === 'number') {
             total = prefetchedAmount;
         } else {
-            total = computeAddCustomPrice();
+            total = addCustomQuote?.min_price;
         }
 
-        const normalized = Number(total) || 0;
-        display.textContent = pricingCostText(normalized, selectedPackageId ?
+        display.textContent = pricingCostText(total, selectedPackageId ?
             getPackageCard('#packages-list', selectedPackageId)?.dataset.quotaMib : addCustomQuote?.quota_mib,
             'add-payable-unit');
 
@@ -5505,6 +5600,8 @@
     }
 
     async function submitAddClient() {
+        const btn = document.querySelector('#add-client-modal .btn-primary');
+        if (btn.disabled) return;
         const email = document.getElementById('add-client-email').value.trim();
         const inboundSelect = document.getElementById('add-client-inbound-select');
         const startAfterFirstUse = document.getElementById('add-client-start-after-first-use').checked;
@@ -5536,8 +5633,7 @@
             start_after_first_use: startAfterFirstUse,
             sender_card: senderCard,
             card_id: destCardId ? parseInt(destCardId) : null,
-            operation_id: window._addClientOperationId || (window._addClientOperationId =
-                (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`))
+            operation_id: window._addClientOperationId || (window._addClientOperationId = clientJobId())
         };
 
         if (usePackage) {
@@ -5554,7 +5650,7 @@
         const reseller = document.getElementById('add-pricing-reseller')?.value;
         if (reseller) payload.reseller_id = Number(reseller);
         if (!payload.free && !payload.quote_revision) {
-            if (usePackage) loadPackages();
+            if (usePackage) loadPackages(true);
             else calculateCustomPrice();
             return showToast(_t('Review the updated price before confirming.'), 'error');
         }
@@ -5562,17 +5658,18 @@
         // v3 multi-inbound: tell the backend every inbound this client should join.
         if (_v3InboundIds && _v3InboundIds.length) payload.inbound_ids = _v3InboundIds;
 
-        const btn = document.querySelector('#add-client-modal .btn-primary');
         const originalText = btn.innerText;
+        btn.dataset.originalText = originalText;
+        const isCurrent = () => window._addClientOperationId === payload.operation_id;
         btn.disabled = true;
         btn.innerText = _t('Processing...');
 
         try {
-            const response = await fetch(`/api/client/${inboundData.server_id}/${inboundData.inbound_id}/add`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            const response = await submitClientJob(
+                `/api/client/${inboundData.server_id}/${inboundData.inbound_id}/add`,
+                payload, payload.operation_id, email, () => {
+                    if (isCurrent()) closeAddClientModal();
+                });
 
             let data = null;
             try {
@@ -5585,7 +5682,6 @@
             }
 
             if (data.success) {
-                window._addClientOperationId = null;
                 showToast(_t('Client created successfully'));
 
                 // Instantly update local last-user cache so the next
@@ -5602,30 +5698,38 @@
                 });
                 lastUserCacheByServer.set(sid, map);
 
-                closeAddClientModal();
+                if (isCurrent()) closeAddClientModal();
                 // Show the success modal FIRST so copy/QR are instantly available.
-                if (data.client) {
+                if (data.client && isCurrent() &&
+                    !document.querySelector('#renew-modal:not(.hidden), #edit-client-modal:not(.hidden)')) {
                     showNewClientModal(data.client, data.copy_text || '', data.tpl_vars || null);
                 }
                 // Defer the server refresh so it doesn't compete with the modal
                 // render. Non-blocking (no wait:true) — on large panels (10k+
                 // clients) a synchronous re-render would freeze mobile. The new
                 // client is already in the optimistic last-user cache above.
-                setTimeout(() => {
-                    refreshData(true, { force: true, serverId: inboundData.server_id });
-                }, 1200);
+                queueSilentServerRefresh(inboundData.server_id);
             } else if (data.code === 'pricing_changed') {
-                if (usePackage) loadPackages();
-                else calculateCustomPrice();
+                if (isCurrent()) {
+                    document.getElementById('add-client-modal').classList.remove('hidden');
+                    btn.disabled = false;
+                    btn.innerText = originalText;
+                    window._addClientOperationId = clientJobId();
+                    if (usePackage) loadPackages(true);
+                    else calculateCustomPrice();
+                }
                 showToast(_t('Review the updated price before confirming.'), 'error');
             } else {
-                showCreditAwareError(data.error || 'Error creating client', response.status);
+                showCreditAwareError(data.error || 'Error creating client',
+                    Number(response.headers.get('X-Eve-Status')) || response.status);
             }
         } catch (error) {
             showToast(_t('Error:') + (error.message || 'Connection failed'), 'error');
         } finally {
-            btn.disabled = false;
-            btn.innerText = originalText;
+            if (isCurrent()) {
+                btn.disabled = false;
+                btn.innerText = originalText;
+            }
         }
     }
 
@@ -8274,7 +8378,14 @@ Connection links
         }
     }
 
+    let editClientJobId = null;
     function openEditClientModal(serverId, inboundId, email, totalGB = 0, expiryTime = 0) {
+        editClientJobId = clientJobId();
+        const saveButton = document.getElementById('edit-client-save-btn');
+        if (saveButton) {
+            saveButton.disabled = false;
+            if (saveButton.dataset.originalText) saveButton.innerText = saveButton.dataset.originalText;
+        }
         ensureEditExpiryPickerReady();
         document.getElementById('edit-client-server-id').value = serverId;
         document.getElementById('edit-client-inbound-id').value = inboundId;
@@ -8441,16 +8552,18 @@ Connection links
 
         const saveBtn = document.getElementById('edit-client-save-btn');
         if (saveBtn && saveBtn.disabled) return;
+        const jobId = editClientJobId;
+        const isCurrent = () => editClientJobId === jobId;
         const originalSaveText = saveBtn ? saveBtn.innerText : 'Save Changes';
         if (saveBtn) {
+            saveBtn.dataset.originalText = originalSaveText;
             saveBtn.disabled = true;
             saveBtn.innerText = _t('Saving...');
         }
 
         try {
-        // ── v3: apply inbound re-assignment FIRST, while every copy still shares
-        // the old email (so the membership scan is consistent). If the original
-        // inbound gets removed, retarget the field-edit below to a remaining one.
+        const commentInput = document.getElementById('edit-client-comment');
+        const payload = { new_email: newEmail, comment: commentInput ? commentInput.value : '' };
         const _inbSt = _editClientInboundState;
         if (_inbSt && _inbSt.isV3 && String(_inbSt.serverId) === String(serverId)) {
             const _target = _getCheckedEditInboundIds();
@@ -8461,29 +8574,9 @@ Connection links
             const _orig = _inbSt.originalIds || new Set();
             const _same = _target.length === _orig.size && _target.every(id => _orig.has(id));
             if (!_same) {
-                try {
-                    const _r = await fetch(`/api/client/${serverId}/${encodeURIComponent(oldEmail)}/inbounds`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ mode: 'set', inbound_ids: _target, client_uuid: _inbSt.clientUuid || '' })
-                    });
-                    let _rj = null;
-                    try { _rj = await _r.json(); } catch (_) { _rj = {}; }
-                    if (!_r.ok || !_rj.success) {
-                        showToast(_rj.error || _t('Inbound update failed (HTTP {v1})', {v1: _r.status}), 'error');
-                        return;
-                    }
-                    // Field-edit needs a still-assigned inbound to target.
-                    if (!_target.includes(parseInt(inboundId))) inboundId = String(_target[0]);
-                } catch (e) {
-                    showToast(_t('Inbound update error: {v1}', {v1: e.message || e}), 'error');
-                    return;
-                }
+                payload.membership = {mode: 'set', inbound_ids: _target, client_uuid: _inbSt.clientUuid || ''};
             }
         }
-
-        const commentInput = document.getElementById('edit-client-comment');
-        const payload = { new_email: newEmail, comment: commentInput ? commentInput.value : '' };
 
         const totalGbInput = document.getElementById('edit-client-total-gb');
         if (totalGbInput) {
@@ -8529,16 +8622,17 @@ Connection links
         }
 
         try {
-            const response = await fetch(`/api/client/${serverId}/${inboundId}/${encodeURIComponent(oldEmail)}/edit`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            const response = await submitClientJob(
+                `/api/client/${serverId}/${inboundId}/${encodeURIComponent(oldEmail)}/edit`,
+                payload, jobId, oldEmail, () => {
+                    if (isCurrent()) closeEditClientModal();
+                });
 
             const result = await response.json();
             if (result.success) {
                 showToast(_t('Client updated successfully'));
-                closeEditClientModal();
+                if (isCurrent()) closeEditClientModal();
+                inboundId = result.inbound_id || inboundId;
 
                 // Optimistic update: apply locally immediately (fast), then reconcile via background refresh.
                 try {
@@ -8575,13 +8669,18 @@ Connection links
 
                 queueSilentServerRefresh(serverId);
             } else {
+                if (result.membership_updated) {
+                    queueSilentServerRefresh(serverId);
+                    showToast(_t('Inbound assignments changed. Other account changes could not be saved.'), 'error');
+                    return;
+                }
                 showToast(result.error || 'Error updating client', 'error');
             }
         } catch (error) {
             showToast(_t('Error updating client'), 'error');
         }
         } finally {
-            if (saveBtn) {
+            if (saveBtn && isCurrent()) {
                 saveBtn.disabled = false;
                 saveBtn.innerText = originalSaveText;
             }

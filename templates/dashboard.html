@@ -36,6 +36,10 @@
 {% endblock %}
 
 {% block content %}
+<details id="client-job-status" class="field-note hidden">
+    <summary id="client-job-counts" aria-live="polite"></summary>
+    <ul id="client-job-list"></ul>
+</details>
 <div class="overview-wrapper">
     <div class="overview-toggle" data-onclick="toggleOverview()">
         <h3>{{ _('Overview') }}</h3>

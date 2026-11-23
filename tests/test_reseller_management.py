@@ -230,6 +230,56 @@ class ResellerManagementTests(unittest.TestCase):
         self.reseller.custom_cost_per_day = 25
         self.assertEqual(_calculate_minimum_price(9, 30, self.reseller.id, user=self.reseller)[0], 750)
 
+    def test_system_custom_quote_uses_global_ranges_for_create_and_renew(self):
+        from panel.services.billing import pricing_quote, pricing_quote_revision
+
+        first = PriceTier(name='Under 20', min_volume_gb=0, max_volume_gb=20, cost_per_gb=13000)
+        second = PriceTier(name='20 and up', min_volume_gb=20, cost_per_gb=11500)
+        assigned = PriceTier(name='Reseller only', reseller_id=self.reseller.id,
+                             cost_per_gb=9000, priority=10)
+        db.session.add_all([first, second, assigned, SystemConfig(key='cost_per_gb', value='15000')])
+        db.session.commit()
+        for purpose in ('create', 'renew'):
+            for volume, tier, expected in ((10, first, 130000), (20, second, 230000)):
+                with self.subTest(purpose=purpose, volume=volume):
+                    response = self.client.get('/api/packages/min-price', query_string={
+                        'purpose': purpose, 'server_id': self.server.id, 'volume_gb': volume, 'days': 31,
+                    })
+                    quote = response.get_json()
+                    self.assertTrue(quote['success'])
+                    self.assertEqual(quote['min_price'], expected)
+                    self.assertEqual(quote['selling_price'], expected)
+                    self.assertEqual(quote['tier_id'], tier.id)
+                    self.assertEqual(quote['quote_revision'], pricing_quote_revision(
+                        pricing_quote(None, volume_gb=volume, days=31, server_id=self.server.id)))
+        self.assertEqual(pricing_quote(self.reseller, volume_gb=10, days=31)['amount'], 90000)
+
+    def test_panel_package_list_loads_reseller_pricing_once(self):
+        from sqlalchemy import event
+
+        db.session.add(PriceTier(name='Reseller only', reseller_id=self.reseller.id, cost_per_gb=100))
+        db.session.add_all(Package(name=f'Package {i}', volume=i, days=30, price=50000)
+                           for i in range(1, 5))
+        db.session.commit()
+        with self.client.session_transaction() as session:
+            session['admin_id'] = self.reseller.id
+
+        selects = dict.fromkeys(('reseller_contracts', 'reseller_offers', 'price_tiers'), 0)
+
+        def count_selects(conn, cursor, statement, parameters, context, executemany):
+            for table in selects:
+                if f'FROM {table}' in statement:
+                    selects[table] += 1
+
+        connection = db.session.connection()
+        event.listen(connection, 'before_cursor_execute', count_selects)
+        try:
+            response = self.client.get('/api/packages?purpose=renew')
+        finally:
+            event.remove(connection, 'before_cursor_execute', count_selects)
+        self.assertEqual(sorted(item['price'] for item in response.get_json()), [100, 200, 300, 400])
+        self.assertEqual(selects, dict.fromkeys(selects, 1))
+
     def test_reseller_can_hide_last_inherited_package(self):
         from panel.services.billing import _build_sub_page_packages
         package = Package(name='visible', days=30, volume=10, price=50000, show_on_sub=True)

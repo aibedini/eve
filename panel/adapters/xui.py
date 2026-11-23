@@ -11,11 +11,13 @@ import math
 import re
 import secrets
 import time
+from copy import copy
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from urllib.parse import quote
 
 import requests
+from flask import g, has_request_context
 from sqlalchemy import func, or_
 
 from panel.core.redis_client import (
@@ -276,9 +278,8 @@ def _probe_legacy_inbound_api(server, session_obj, *, force=False) -> str:
     first-class probe 404'd would therefore be a guess - and the guess lands a
     mutation on a panel that may well be modern.
 
-    The probe is a READ: ``POST /panel/api/inbounds/onlines`` lists online clients on
-    every version that has the legacy family (<= v3.0.x) and is absent from v3.1.0
-    onwards, where client listing moved to /clients/onlines. So:
+    The probe is a READ using the legacy online-client endpoints. From v3.1.0
+    client listing moved to /clients/onlines. So:
         200  -> the legacy family exists (v2.x / v3.0.x), proven
         404  -> neither family answered: unclassifiable, not "legacy"
         401/403 -> credential or scope problem, not a version fact
@@ -292,14 +293,17 @@ def _probe_legacy_inbound_api(server, session_obj, *, force=False) -> str:
         if cached and time.time() < float(cached.get("expiry") or 0):
             return str(cached.get("state"))
     base, webpath = extract_base_and_webpath(server.host)
-    url = "%s%s/panel/api/inbounds/onlines" % (base, webpath)
-    try:
-        resp = session_obj.post(url, json={}, timeout=(3, 8),
-                                verify=session_tls_verify(session_obj),
-                                headers=_probe_headers_for(server))
-        outcome = _classify_probe_response(resp)
-    except Exception:
-        return PROBE_TRANSPORT_ERROR
+    for path in ('/panel/api/inbounds/onlines', '/panel/api/inbounds/inbound/onlines',
+                 '/panel/inbound/onlines'):
+        try:
+            resp = session_obj.post(f'{base}{webpath}{path}', json={}, timeout=(3, 8),
+                                    verify=session_tls_verify(session_obj),
+                                    headers=_probe_headers_for(server))
+            outcome = _classify_probe_response(resp)
+        except Exception:
+            return PROBE_TRANSPORT_ERROR
+        if outcome != PROBE_ROUTE_MISSING:
+            break
     if sid is not None and outcome in (PROBE_SUPPORTED, PROBE_ROUTE_MISSING,
                                        PROBE_AUTH_INVALID, PROBE_SCOPE_INSUFFICIENT):
         XUI_LEGACY_PROBE_CACHE[sid] = {"state": outcome,
@@ -1552,6 +1556,16 @@ def _fetch_csrf_token(session_obj, base, webpath):
     return None
 
 
+def _session_for_caller(panel_session):
+    if not has_request_context() or not getattr(g, 'client_mutation_job', False):
+        return panel_session
+    # Independent cookies and headers while sharing the HTTP adapter's connection pool.
+    session_obj = copy(panel_session)
+    session_obj.cookies = panel_session.cookies.copy()
+    session_obj.headers = panel_session.headers.copy()
+    return session_obj
+
+
 def get_xui_session(server):
     # Deferred import: lives in app.py (module-level import would be circular)
     from app import app, get_server_password
@@ -1575,10 +1589,10 @@ def get_xui_session(server):
 
     # Try to reuse session from cache
     now = time.time()
-    if server.id in XUI_SESSION_CACHE:
-        cached = XUI_SESSION_CACHE[server.id]
+    cached = XUI_SESSION_CACHE.get(server.id)
+    if cached:
         if now < cached['expiry'] and cached.get('auth_key', '') == _auth_key:
-            return cached['session'], None
+            return _session_for_caller(cached['session']), None
         else:
             XUI_SESSION_CACHE.pop(server.id, None)
 
@@ -1596,7 +1610,7 @@ def get_xui_session(server):
         session_obj.headers.update({'Authorization': f'Bearer {_api_token}'})
         _probe_v3_client_api(server, session_obj, force=True)
         XUI_SESSION_CACHE[server.id] = {'session': session_obj, 'expiry': now + XUI_SESSION_TTL, 'auth_key': _auth_key}
-        return session_obj, None
+        return _session_for_caller(session_obj), None
 
     try:
         base, webpath = extract_base_and_webpath(server.host)
@@ -1664,7 +1678,7 @@ def get_xui_session(server):
             # Cookie login is fully supported by v3. Detect the API generation
             # now so every later mutation chooses the correct endpoint family.
             _probe_v3_client_api(server, session_obj, force=True)
-            return session_obj, None
+            return _session_for_caller(session_obj), None
 
         msg = None
         if isinstance(login_json, dict):
@@ -1743,6 +1757,11 @@ def fetch_inbounds(session_obj, host, panel_type='auto', *, force_fresh=False):
             ("/xui/API/inbounds/", "alireza"),
             ("/xui/inbound/list", "xui"),
         ])
+    if normalized_type in ('sanaei', 'auto'):
+        endpoints_map.extend([
+            ("/panel/api/inbounds/inbound/list", "sanaei"),
+            ("/panel/inbound/list", "sanaei"),
+        ])
 
     # De-duplicate while preserving order
     seen = set()
@@ -1780,6 +1799,9 @@ def fetch_inbounds(session_obj, host, panel_type='auto', *, force_fresh=False):
                 if resp.status_code == 405:
                     resp = session_obj.post(url, headers=request_headers, params=request_params,
                                             verify=session_tls_verify(session_obj), timeout=timeout_sec)
+            elif ep_l in ('/panel/api/inbounds/inbound/list', '/panel/inbound/list'):
+                resp = session_obj.post(url, headers=request_headers, params=request_params,
+                                        verify=session_tls_verify(session_obj), timeout=timeout_sec)
             elif '/xui/' in ep_l:
                 resp = session_obj.post(url, json={"page": 1, "limit": 100},
                                         headers=request_headers, params=request_params,
@@ -1900,6 +1922,7 @@ def fetch_onlines(session_obj, host, panel_type='auto'):
                 # Fallbacks for older builds
                 ('POST', '/panel/inbound/onlines'),
                 ('POST', '/panel/api/inbounds/onlines'),
+                ('POST', '/panel/api/inbounds/inbound/onlines'),
             ])
         if normalized_type in ('alireza', 'alireza0', 'xui', 'x-ui', 'auto', ''):
             candidates.extend([
@@ -2112,9 +2135,9 @@ def fetch_server_status(session_obj, host, panel_type='auto'):
             ('/xui/API/server/status', 'alireza'),
         ])
 
-    # Add non-API fallback paths (some older panel versions only expose these)
-    if normalized_type in ('alireza', 'alireza0', 'xui', 'x-ui', 'auto', ''):
-        endpoints.append(('/server/status', 'alireza'))
+    # Older Sanaei builds mount status outside /panel/api; some use POST.
+    if normalized_type in ('sanaei', 'alireza', 'alireza0', 'xui', 'x-ui', 'auto', ''):
+        endpoints.append(('/server/status', 'sanaei' if normalized_type == 'sanaei' else 'alireza'))
 
     seen = set()
     deduped = []
@@ -2131,7 +2154,10 @@ def fetch_server_status(session_obj, host, panel_type='auto'):
     for ep, detected_type in deduped:
         try:
             url = ep if ep.startswith('http') else f"{base}{webpath}{ep}"
-            resp = session_obj.get(url, verify=session_tls_verify(session_obj), timeout=timeout_sec, allow_redirects=False)
+            options = dict(verify=session_tls_verify(session_obj), timeout=timeout_sec, allow_redirects=False)
+            resp = session_obj.get(url, **options)
+            if ep == '/server/status' and resp.status_code in (404, 405):
+                resp = session_obj.post(url, **options)
 
             # Redirect usually means session expired -> redirected to login page
             if resp.status_code in (301, 302, 303, 307, 308):

@@ -433,10 +433,9 @@
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
-                    <label>Reseller (blank = global)</label>
-                    <select id="tier-reseller" class="form-input">
-                        <option value="">— Global —</option>
-                    </select>
+                    <label for="tier-reseller">{{ 'رسلرهای مشمول' if panel_lang == 'fa' else 'Assigned resellers' }}</label>
+                    <select id="tier-reseller" class="form-select" multiple aria-describedby="tier-reseller-note"></select>
+                    <small id="tier-reseller-note" class="field-note">{{ 'بدون انتخاب، این پلکان برای حساب‌های سیستمی و رسلرهای بدون پلکان اختصاصی اعمال می‌شود.' if panel_lang == 'fa' else 'With no selection, this tier applies to system accounts and resellers without a matching assigned tier.' }}</small>
                 </div>
                 <div class="form-group">
                     <label>Priority (higher = preferred)</label>
@@ -1279,15 +1278,15 @@ function renderTiers(body) {
     };
     const tierResellerNames = tier => {
         const ids = tier.assigned_reseller_ids || (tier.reseller_id ? [tier.reseller_id] : []);
-        if (!ids.length) return 'Global';
+        if (!ids.length) return pkgT('System + reseller fallback', 'سیستم و رسلرهای بدون پلکان اختصاصی');
         return ids.map(id => resellerName(parseInt(id))).join(', ');
     };
 
     const fmtRange = (mn, mx, unit) => {
         if (mn == null && mx == null) return 'Any';
-        if (mn != null && mx != null) return `${mn}–${mx} ${unit}`;
+        if (mn != null && mx != null) return `${mn} ≤ x &lt; ${mx} ${unit}`;
         if (mn != null) return `≥ ${mn} ${unit}`;
-        return `< ${mx} ${unit}`;
+        return `&lt; ${mx} ${unit}`;
     };
 
     body.innerHTML = `
@@ -1357,16 +1356,9 @@ async function openTierModal(tier) {
 
     // Populate reseller dropdown
     const sel = document.getElementById('tier-reseller');
-    sel.innerHTML = '<option value="">— Global —</option>' +
-        _resellerCache.map(r => `<option value="${r.id}" ${tier && tier.reseller_id === r.id ? 'selected' : ''}>${escHtml(r.username)}</option>`).join('');
-    if (tier && tier.reseller_id) sel.value = tier.reseller_id;
-    sel.multiple = true;
-    sel.size = Math.min(6, Math.max(3, _resellerCache.length || 3));
     const selectedIds = new Set((tier?.assigned_reseller_ids || (tier?.reseller_id ? [tier.reseller_id] : [])).map(id => parseInt(id)));
-    Array.from(sel.options).forEach(opt => {
-        if (opt.value === '') opt.remove();
-        else opt.selected = selectedIds.has(parseInt(opt.value));
-    });
+    sel.replaceChildren(..._resellerCache.map(r => new Option(r.username, r.id, false, selectedIds.has(Number(r.id)))));
+    sel.size = Math.min(6, Math.max(3, _resellerCache.length));
 
     document.getElementById('tier-modal').classList.remove('hidden');
 }

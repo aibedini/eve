@@ -114,7 +114,7 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.orm import joinedload
 
-APP_VERSION = "2.23.18"
+APP_VERSION = "2.23.19"
 GITHUB_REPO = "aibedini/eve"
 APP_START_TS = time.time()
 PROCESS_ROLE = (os.environ.get('EVE_PROCESS_ROLE') or 'combined').strip().lower()
@@ -1885,12 +1885,16 @@ def _add_health_log(level, category, message, action_taken=None, details=None, r
 CLIENT_UPDATE_FALLBACKS = [
     "/panel/api/inbounds/updateClient/:clientId",
     "/panel/api/inbounds/:id/updateClient/:clientId",
+    "/panel/api/inbounds/inbound/updateClient/:clientId",
+    "/panel/inbound/updateClient/:clientId",
     "/xui/API/inbounds/updateClient/:clientId",
     "/xui/inbound/updateClient/:clientId"
 ]
 
 CLIENT_RESET_FALLBACKS = [
     "/panel/api/inbounds/:id/resetClientTraffic/:email",
+    "/panel/api/inbounds/inbound/:id/resetClientTraffic/:email",
+    "/panel/inbound/:id/resetClientTraffic/:email",
     "/xui/API/inbounds/:id/resetClientTraffic/:email",
     "/xui/inbounds/:id/resetClientTraffic/:email",
     "/xui/inbound/:id/resetClientTraffic/:email"
@@ -1898,6 +1902,8 @@ CLIENT_RESET_FALLBACKS = [
 
 CLIENT_DELETE_FALLBACKS = [
     "/panel/api/inbounds/:id/delClient/:clientId",
+    "/panel/api/inbounds/inbound/:id/delClient/:clientId",
+    "/panel/inbound/:id/delClient/:clientId",
     "/xui/API/inbounds/:id/delClient/:clientId",
     "/xui/inbound/delClient/:clientId"
 ]
@@ -1913,6 +1919,8 @@ INBOUND_GET_FALLBACKS = [
 
 INBOUND_UPDATE_FALLBACKS = [
     "/panel/api/inbounds/update/:id",
+    "/panel/api/inbounds/inbound/update/:id",
+    "/panel/inbound/update/:id",
     "/xui/API/inbounds/update/:id",
     "/xui/inbound/update/:id",
     "/xui/inbounds/update/:id",

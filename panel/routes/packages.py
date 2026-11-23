@@ -16,7 +16,7 @@ from panel.services.billing import (
     _get_applicable_price_tier, _tier_assigned_reseller_ids, calculate_reseller_price,
     calculate_tariff_price, reseller_sub_package_ids,
     catalog_offer, creation_reseller_id, customer_package_price, customer_package_visible, package_allowed_in_panel,
-    package_in_catalog, pricing_owner, pricing_quote, pricing_quote_revision,
+    package_in_catalog, package_quote_context, pricing_owner, pricing_quote, pricing_quote_revision,
 )
 
 bp = Blueprint('packages', __name__)
@@ -101,6 +101,7 @@ def get_packages():
         creators = Admin.query.filter(Admin.id.in_(list(creator_ids))).all()
         creator_map = {a.id: a.username for a in creators}
 
+    quote_context = package_quote_context(payer) if payer and packages else None
     result = []
     for p in packages:
         if purpose in ('create', 'renew') and not package_allowed_in_panel(p, user, reseller_id, purpose):
@@ -124,7 +125,7 @@ def get_packages():
         p_dict = p.to_dict()
         if purpose in ('create', 'renew') or user.role == 'reseller':
             try:
-                quote = pricing_quote(payer, package=p, server_id=server_id)
+                quote = pricing_quote(payer, package=p, server_id=server_id, package_context=quote_context)
             except ValueError:
                 continue
             p_dict['price'] = quote['amount']

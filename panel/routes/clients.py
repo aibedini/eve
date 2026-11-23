@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import qrcode
 import requests
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, g, jsonify, request, session
 from sqlalchemy import func, or_
 
 from panel.adapters import xui as xui_adapter
@@ -27,6 +27,7 @@ from panel.routes.common import admin_is_superadmin, login_required, permission_
 from panel.security import outbound_tls_verify, panel_tls_verify
 from panel.services import client_operations as client_operations_state
 from panel.services.billing import creation_reseller_id, package_allowed_in_panel, pricing_owner, pricing_quote, pricing_quote_revision
+from panel.services.client_mutation_queue import enqueue_dashboard_mutation, job_status, pending_jobs
 from panel.services.client_operations import (
     begin_client_operation, complete_client_operation, fail_client_operation,
     install_client_operation_response_guard, load_client_operation,
@@ -44,6 +45,19 @@ from panel.services.payment_duplicate import (
 )
 
 bp = Blueprint('clients', __name__)
+
+@bp.get('/api/client-jobs')
+@login_required
+@permission_required('clients.write')
+def client_jobs():
+    return jsonify(jobs=pending_jobs(session['admin_id'])), 200, {'Cache-Control': 'no-store'}
+
+
+@bp.get('/api/client-jobs/<job_id>')
+@login_required
+@permission_required('clients.write')
+def client_job(job_id):
+    return jsonify(job_status(session['admin_id'], job_id)), 200, {'Cache-Control': 'no-store'}
 
 
 def _pricing_payer(actor, reseller_id):
@@ -706,6 +720,7 @@ def reset_client_traffic(server_id, inbound_id):
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/edit', methods=['POST'])
 @login_required
 @permission_required('clients.write')
+@enqueue_dashboard_mutation('edit')
 def edit_client(server_id, inbound_id, email):
     from app import (  # deferred: app-level helper, avoids circular import
         CLIENT_UPDATE_FALLBACKS, GLOBAL_REFRESH_LOCK, GLOBAL_SERVER_DATA, _get_panel_ui_lang,
@@ -756,7 +771,7 @@ def edit_client(server_id, inbound_id, email):
         inbounds = None
         target_client = None
         fetched_inbound_row_edit = None
-        if (edit_is_v3 and new_email == email
+        if (not getattr(g, 'client_mutation_job', False) and edit_is_v3 and new_email == email
                 and _v3_sanitize_email(email) == email):
             try:
                 with GLOBAL_REFRESH_LOCK:
@@ -777,7 +792,8 @@ def edit_client(server_id, inbound_id, email):
                 target_client = None
 
         if not target_client:
-            inbounds, fetch_err, detected_type = fetch_inbounds(session_obj, server.host, server.panel_type)
+            read_options = {'force_fresh': True} if getattr(g, 'client_mutation_job', False) else {}
+            inbounds, fetch_err, detected_type = fetch_inbounds(session_obj, server.host, server.panel_type, **read_options)
             if fetch_err:
                 return jsonify({"success": False, "error": "Failed to fetch inbounds"}), 400
             persist_detected_panel_type(server, detected_type)
@@ -1716,6 +1732,7 @@ def retry_renewal_sms(operation_key):
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/<email>/renew', methods=['POST'])
 @login_required
 @permission_required('clients.write')
+@enqueue_dashboard_mutation('renew')
 def renew_client(server_id, inbound_id, email, *, order_quote=None):
     """Renew client expiry and/or volume"""
     from app import (  # deferred: app-level helper, avoids circular import
@@ -2006,7 +2023,8 @@ def renew_client(server_id, inbound_id, email, *, order_quote=None):
     from panel.core import refresh_policy as _refresh_policy  # deferred: keeps route import light
     baseline_max_age = _refresh_policy.baseline_max_age_seconds()
     baseline_snapshot_stamp = GLOBAL_SERVER_DATA.get('last_update')
-    cached_inbounds = GLOBAL_SERVER_DATA.get('inbounds') or []
+    queued_job = getattr(g, 'client_mutation_job', False)
+    cached_inbounds = [] if queued_job else (GLOBAL_SERVER_DATA.get('inbounds') or [])
     for ib in cached_inbounds:
         try:
             if int(ib.get('server_id', -1)) == int(server.id) and int(ib.get('id', -1)) == int(inbound_id):
@@ -2041,8 +2059,8 @@ def renew_client(server_id, inbound_id, email, *, order_quote=None):
     # would double-charge + double-SMS. Held for the TTL on SUCCESS (so a retry
     # right after completion is also blocked) and released immediately on failure.
     _renew_lock_key = f"renew:lock:{server_id}:{(email or '').strip().lower()}"
-    _renew_lock_token = _acquire_renew_lock(_renew_lock_key, ttl=45)
-    if not _renew_lock_token:
+    _renew_lock_token = None if queued_job else _acquire_renew_lock(_renew_lock_key, ttl=45)
+    if not queued_job and not _renew_lock_token:
         _lang = _get_panel_ui_lang()
         _msg = ("این اکانت همین الان در حال تمدید است — چند لحظه صبر کنید و سپس Re-check بزنید."
                 if _lang == 'fa' else
@@ -2052,9 +2070,10 @@ def renew_client(server_id, inbound_id, email, *, order_quote=None):
         # than a red error toast, and never double-charge.
         return _finish({"success": False, "code": "renew_in_progress", "error": _msg,
                         "server_id": server_id, "inbound_id": inbound_id, "email": email}, 409)
-    renew_lock_heartbeat_stop = _start_renew_lock_heartbeat(
-        _renew_lock_key, _renew_lock_token, ttl=45,
-    )
+    if _renew_lock_token:
+        renew_lock_heartbeat_stop = _start_renew_lock_heartbeat(
+            _renew_lock_key, _renew_lock_token, ttl=45,
+        )
 
     # This is a new renewal, not a duplicate retry. Do not let a short-lived
     # result from the previous renewal satisfy this one's Re-check.
@@ -2064,7 +2083,8 @@ def renew_client(server_id, inbound_id, email, *, order_quote=None):
         if not target_client:
             # Fallback to fetching from panel if not in cache
             t_fetch0 = time.perf_counter()
-            inbounds, fetch_err, detected_type = fetch_inbounds(session_obj, server.host, server.panel_type)
+            read_options = {'force_fresh': True} if queued_job else {}
+            inbounds, fetch_err, detected_type = fetch_inbounds(session_obj, server.host, server.panel_type, **read_options)
             timing["fetch_inbounds_ms"] = int((time.perf_counter() - t_fetch0) * 1000)
             if fetch_err:
                 return _finish({"success": False, "error": "Failed to fetch inbounds"}, 400)
@@ -2129,7 +2149,6 @@ def renew_client(server_id, inbound_id, email, *, order_quote=None):
         _before_evidence.update(source_endpoint='inbounds/list',
                                 timestamp_ms=int(time.time() * 1000), status='ok')
         if user.role == 'support':
-            from flask import g
             from panel.services.support import scoped_account
             valid, live = xui_adapter.read_authoritative_client_settings(server, session_obj, email)
             if (not valid or not isinstance(live, dict) or str(live.get('id')) !=
@@ -4403,6 +4422,7 @@ def client_qrcode():
 @bp.route('/api/client/<int:server_id>/<int:inbound_id>/add', methods=['POST'])
 @login_required
 @permission_required('clients.write')
+@enqueue_dashboard_mutation('add')
 def add_client(server_id, inbound_id, *, order_quote=None):
     from app import (  # deferred: app-level helper, avoids circular import
         CLIENT_CREATED_SMS_TEMPLATE_TYPE, DEFAULT_CLIENT_CREATED_SMS_TEMPLATE,
@@ -4412,7 +4432,7 @@ def add_client(server_id, inbound_id, *, order_quote=None):
         _safe_response_json, _ss_password, add_cached_client, app,
         build_panel_subscription_url, build_panel_url, build_public_subscription_url,
         collect_endpoint_templates,
-        ensure_reseller_allowed_for_assignment, generate_client_link, get_reseller_access_maps,
+        ensure_reseller_allowed_for_assignment, fetch_inbounds, generate_client_link, get_reseller_access_maps,
         get_xui_session, invalidate_ownership_cache, is_inbound_accessible,
         is_server_accessible, log_transaction, server_is_v3, v3_add_client,
     )
@@ -4699,6 +4719,11 @@ def add_client(server_id, inbound_id, *, order_quote=None):
             # Some panels wrap as {success:true, data:{...}} or return empty on wrong endpoint.
             last_fetch_error = "Empty inbound data"
 
+        if not inbound_data and server.panel_type in ('sanaei', 'auto'):
+            # Older 3x-ui exposes a POST list without a single-inbound read.
+            inbounds, _, _ = fetch_inbounds(session_obj, server.host, server.panel_type, force_fresh=True)
+            inbound_data = next((row for row in (inbounds or [])
+                                 if isinstance(row, dict) and str(row.get('id')) == str(inbound_id)), None)
         if not inbound_data:
             details = last_fetch_error or 'Failed to fetch inbound data from panel'
             if last_fetch_url:

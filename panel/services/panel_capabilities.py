@@ -64,8 +64,9 @@ FIRST_CLASS_CLIENT_API_FAMILY = (3, 1)
 #: nodePending appears in the update response from v3.3.1 (patch matters here).
 NODE_PENDING_FAMILY = (3, 3)
 NODE_PENDING_MIN_PATCH = 1
-#: bulkEnable / bulkDisable appear in v3.5.
-BULK_ENABLE_FAMILY = (3, 5)
+#: bulkEnable / bulkDisable first registered in v3.4.1 (upstream client.go).
+BULK_ENABLE_FAMILY = (3, 4)
+BULK_ENABLE_MIN_PATCH = 1
 #: Scoped/expiring API tokens appear in v3.7 (tracked by the compatibility profile
 #: too; the profile is the authority when a version is unparsed but certified).
 SCOPED_TOKENS_FAMILY = (3, 7)
@@ -233,8 +234,8 @@ def capabilities_from_version(version, *, profile=None, client_route_proven=None
     # guessed bulkEnable.
     node_pending = _family_at_least(version, NODE_PENDING_FAMILY,
                                     min_patch=NODE_PENDING_MIN_PATCH)
-    bulk_enable = _family_at_least(version, BULK_ENABLE_FAMILY)
-    evidence['bulk_enable'] = ('version >= 3.5' if bulk_enable else 'not proven')
+    bulk_enable = _family_at_least(version, BULK_ENABLE_FAMILY, min_patch=BULK_ENABLE_MIN_PATCH)
+    evidence['bulk_enable'] = ('version >= 3.4.1' if bulk_enable else 'not proven')
     evidence['node_pending'] = ('version >= 3.3.1' if node_pending else 'not proven')
     evidence['client_traffic'] = 'first-class family (>= 3.1)'
     return PanelClientCapabilities(
@@ -394,7 +395,7 @@ def select_renew_strategy(caps: PanelClientCapabilities) -> RenewStrategy:
         return RenewStrategy.V3_CURRENT
     if tuple(family) >= (3, 7):
         return RenewStrategy.V3_SCOPED
-    if tuple(family) >= (3, 5):
+    if caps.bulk_enable:
         return RenewStrategy.V3_BULK_ENABLE
     if tuple(family) >= (3, 3):
         return RenewStrategy.V3_NODE_PENDING

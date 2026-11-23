@@ -87,8 +87,13 @@ class VersionMatrixTests(unittest.TestCase):
             caps_mod.select_renew_strategy(self._caps('3.4.0', route_proven=True)),
             caps_mod.RenewStrategy.V3_NODE_PENDING)
 
-    def test_bulk_enable_arrives_in_3_5(self):
+    def test_bulk_enable_arrives_in_3_4_1(self):
         self.assertFalse(self._caps('3.4.0', route_proven=True).bulk_enable)
+        self.assertTrue(self._caps('3.4.1', route_proven=True).bulk_enable)
+        self.assertTrue(self._caps('3.4.2', route_proven=True).bulk_enable)
+        self.assertEqual(
+            caps_mod.select_renew_strategy(self._caps('3.4.1', route_proven=True)),
+            caps_mod.RenewStrategy.V3_BULK_ENABLE)
         self.assertTrue(self._caps('3.5.0', route_proven=True).bulk_enable)
         self.assertTrue(self._caps('3.6.0', route_proven=True).bulk_enable)
         self.assertEqual(

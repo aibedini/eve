@@ -2,6 +2,15 @@
 from panel.core.i18n import register
 
 FA = {
+    'Account operations: {queued} queued, {running} running': 'عملیات حساب‌ها: {queued} در صف، {running} در حال اجرا',
+    'Account operation queued for {email}': 'درخواست حساب {email} وارد صف شد',
+    'Account operation completed for {email}': 'عملیات حساب {email} انجام شد',
+    'Account operation status is unavailable.': 'وضعیت عملیات حساب در دسترس نیست.',
+    'The operation was interrupted. Check the account before trying again.': 'اجرای درخواست قطع شد. پیش از تلاش دوباره وضعیت حساب را بررسی کنید.',
+    '{email} is queued': '{email} در صف است',
+    '{email} is running': 'درخواست {email} در حال اجراست',
+    'Inbound assignments changed. Other account changes could not be saved.': 'اینباندها تغییر کردند. سایر تغییرات حساب ذخیره نشدند.',
+    'Showing cached packages while prices refresh': 'تا به\u200cروزرسانی قیمت\u200cها، پکیج\u200cهای ذخیره\u200cشده نمایش داده می\u200cشوند.',
     ' (filtered from {totalUnique})': ' (فیلترشده از {totalUnique})',
     ' ({v1}d ago)': ' ({v1} روز پیش)',
     ' ago': ' پیش',
@@ -188,8 +197,6 @@ FA = {
     'Inactive accounts': 'اکانت\u200cهای غیرفعال',
     'Inbound': 'اینباند',
     'Inbound data not loaded': 'داده\u200cهای اینباند بارگذاری نشد',
-    'Inbound update error: {v1}': 'خطا در به\u200cروزرسانی اینباند: {v1}',
-    'Inbound update failed (HTTP {v1})': 'به\u200cروزرسانی اینباند ناموفق بود (HTTP {v1})',
     'Inbound {id}': 'اینباند {id}',
     'Inbound {iid}': 'اینباند {iid}',
     'Inbounds': 'اینباندها',

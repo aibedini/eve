@@ -14,7 +14,7 @@
 | 3.0 | v3.0.0 | Major rewrite; inbound API still primary |
 | 3.1 | v3.1.0 – v3.2.x | First-class `/panel/api/clients/*` endpoints |
 | 3.3 | v3.3.0 – v3.3.6 | `nodePending` in update response (from 3.3.1) |
-| 3.5 | v3.5.0 – v3.6.x | `bulkEnable`/`bulkDisable`/`bulkAdjust` |
+| 3.4–3.6 | v3.4.0 – v3.6.x | `bulkEnable` and `bulkDisable` from v3.4.1; `bulkAdjust` already exists in v3.1.0 |
 | 3.7 | v3.7.0 – v3.7.x | Scoped/expiring API tokens, `limitHwid` |
 | 3.8 | v3.8.0 – v3.8.x | Bearer 401 rejection, random sub paths, TUIC |
 | 3.9 | v3.9.0 – v3.9.x | Inbound update no longer mutates clients; native attach/detach required; renewal preview added |
@@ -59,13 +59,15 @@ in `internal/web/controller/api.go`). Token scope restricts which
 | Method | Path | Since | Notes |
 |--------|------|-------|-------|
 | POST | `/login` | v2.0 | Returns session cookie |
-| GET | `/panel/api/server/status` | v2.0 | CPU, memory, disk, uptime, Xray state |
+| GET | `/panel/api/server/status` | v2.7.0 | CPU, memory, disk, uptime, Xray state |
+| POST | `/server/status` | v1.0.8–v2.6.8 | Legacy server status |
 | GET | `/panel/api/server/getXrayVersion` | v2.0 | Running Xray core version |
 | POST | `/panel/api/server/installXray/:version` | v2.0 | Install/update Xray core |
 | POST | `/panel/api/server/stopXrayService` | v2.0 | Stop Xray process |
 | POST | `/panel/api/server/restartXrayService` | v2.0 | Restart Xray process |
 | GET | `/panel/api/server/getConfigJson` | v3.0 | Current Xray JSON config |
-| GET | `/panel/api/server/getDb` | v3.0 | Database backup download |
+| GET | `/panel/api/server/getDb` | v2.7.0 | SQLite database or PostgreSQL custom dump (v3.2.5+) |
+| GET | `/server/getDb` | v1.2.2+ | Legacy database backup download |
 | POST | `/panel/api/server/importDB` | v3.0 | Database restore (multipart) |
 | GET | `/panel/api/server/getNewX25519Cert` | v3.0 | Generate X25519 key pair |
 | GET | `/panel/api/server/getPanelUpdateInfo` | v3.5 | Latest release info from GitHub |
@@ -75,7 +77,8 @@ in `internal/web/controller/api.go`). Token scope restricts which
 
 | Method | Path | Since | Notes |
 |--------|------|-------|-------|
-| GET | `/panel/api/inbounds/list` | v2.0 | All inbounds with embedded clients |
+| GET | `/panel/api/inbounds/list` | Current | All inbounds with embedded clients |
+| POST | `/panel/api/inbounds/inbound/list` | Legacy | Older Sanaei list route. The cookie-authenticated `/panel/inbound/list` serves the same operation. |
 | GET | `/panel/api/inbounds/get/:id` | v2.0 | Single inbound by ID |
 | POST | `/panel/api/inbounds/add` | v2.0 | Create inbound |
 | POST | `/panel/api/inbounds/update/:id` | v2.0 | Update inbound; v3.9+ ignores client-list edits |
@@ -88,7 +91,7 @@ in `internal/web/controller/api.go`). Token scope restricts which
 | POST | `/panel/api/inbounds/updateClient/:uuid` | legacy | Update client within inbound |
 | POST | `/panel/api/inbounds/:id/resetClientTraffic/:email` | legacy | Reset one client's traffic |
 | POST | `/panel/api/inbounds/:id/delClient/:uuid` | legacy | Delete client from inbound |
-| GET | `/panel/api/inbounds/createbackup` | legacy | Trigger backup creation |
+| GET | `/panel/api/inbounds/createbackup` | legacy | Ask 3x-ui to send a backup to its Telegram admins |
 | POST | `/panel/api/inbounds/setEnable/:id` | ≤v3.8 | Change inbound enable state |
 
 ### Client management (v3.1+ — first-class API)
@@ -105,12 +108,12 @@ in `internal/web/controller/api.go`). Token scope restricts which
 | POST | `/panel/api/clients/del/:email` | v3.1 | Delete client |
 | POST | `/panel/api/clients/resetTraffic/:email` | v3.1 | Zero client traffic counters |
 | GET | `/panel/api/clients/traffic/:email` | v3.1 | Client traffic stats |
-| POST | `/panel/api/clients/onlines` | v3.3 | Online client list (alternative to inbounds/onlines) |
+| POST | `/panel/api/clients/onlines` | v3.1 | Online client list (alternative to inbounds/onlines) |
 | POST | `/panel/api/clients/:email/attach` | v3.5 | Attach client to additional inbound(s) |
 | POST | `/panel/api/clients/:email/detach` | v3.5 | Detach client from inbound(s) |
-| POST | `/panel/api/clients/bulkEnable` | v3.5 | Enable multiple clients at once |
-| POST | `/panel/api/clients/bulkDisable` | v3.5 | Disable multiple clients at once |
-| POST | `/panel/api/clients/bulkAdjust` | v3.5 | Adjust traffic/expiry for multiple clients |
+| POST | `/panel/api/clients/bulkEnable` | v3.4.1 | Enable multiple clients at once |
+| POST | `/panel/api/clients/bulkDisable` | v3.4.1 | Disable multiple clients at once |
+| POST | `/panel/api/clients/bulkAdjust` | v3.1 | Adjust traffic/expiry for multiple clients |
 
 ### Additional routes through v3.11.0
 
@@ -190,14 +193,25 @@ EVE maps each detected panel version to a `RenewStrategy` (see
 |----------|---------------|----------|---------------|
 | `LEGACY_INBOUND` | v2.x, v3.0.x | `/panel/api/inbounds/*` | Client embedded in inbound JSON |
 | `V3_EARLY` | v3.1 – v3.2 | `/panel/api/clients/*` | No bulk, no nodePending |
-| `V3_NODE_PENDING` | v3.3 – v3.4 | `/panel/api/clients/*` | Update response has `nodePending` |
-| `V3_BULK_ENABLE` | v3.5 – v3.6 | `/panel/api/clients/*` | `bulkEnable`/`bulkAdjust` available |
+| `V3_NODE_PENDING` | v3.3.1 – v3.4.0 | `/panel/api/clients/*` | Update response has `nodePending` |
+| `V3_BULK_ENABLE` | v3.4.1 – v3.6 | `/panel/api/clients/*` | `bulkEnable`/`bulkAdjust` available |
 | `V3_SCOPED` | v3.7 | `/panel/api/clients/*` | Scoped tokens, `limitHwid` preservation |
 | `V3_CURRENT` | v3.8 | `/panel/api/clients/*` | Bearer 401, partial-write awareness |
 | `UNKNOWN_FUTURE` | v3.9+ | Probe-only | Inherits nothing; uses only proven capabilities |
 | `BLOCKED` | Any | None | Auth/scope/transport failure; no mutation allowed |
 
 ### Evidence discipline
+
+The route audit covered 132 upstream semantic-version tags from v1.0.8 through
+v3.11.0, comparing the API, server, inbound and client controllers and the
+database export implementation. Versions v1.0.8 through v1.2.0 have no
+`getDb` download route. From v1.2.2 through v2.6.8, the legacy route is
+`/server/getDb`. From v2.7.0, the API exposes `/panel/api/server/getDb`.
+PostgreSQL custom archives were added in v3.2.5 on the same route.
+3x-ui needs a compatible `pg_dump` on its own host to generate the archive.
+Eve recognizes the archive by its `PGDMP` header and saves it as `.dump`.
+This is a source audit of registered routes. Verification against running
+panels is needed to establish behavior for individual builds and configurations.
 
 The `KNOWN_BEHAVIOUR_CEILING` in `panel_capabilities.py` is `(3, 11)`.
 Versions above this ceiling **never inherit** the newest certified profile.

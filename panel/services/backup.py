@@ -974,6 +974,8 @@ def _extract_backup_payload_from_json(data) -> tuple[bytes | None, str | None]:
 
 
 def _extract_backup_bytes_from_response(resp: requests.Response) -> tuple[bytes | None, str | None, str | None]:
+    if resp.status_code != 200:
+        return None, None, f"HTTP {resp.status_code}"
     content_type = (resp.headers.get('Content-Type') or '').lower()
     filename_hint = _content_disposition_filename(resp.headers.get('Content-Disposition'))
 
@@ -990,9 +992,6 @@ def _extract_backup_bytes_from_response(resp: requests.Response) -> tuple[bytes 
         ext = _guess_backup_extension(content_type, json_filename or filename_hint)
         return payload, ext, None
 
-    if resp.status_code != 200:
-        return None, None, f"HTTP {resp.status_code}"
-
     if not resp.content:
         return None, None, "Empty response (status 200)"
 
@@ -1000,9 +999,20 @@ def _extract_backup_bytes_from_response(resp: requests.Response) -> tuple[bytes 
 
 
 def _is_sqlite_payload(payload: bytes | None) -> bool:
-    if not payload or len(payload) < 16:
-        return False
-    return payload.startswith(b"SQLite format 3")
+    return bool(payload and payload.startswith(b"SQLite format 3\x00"))
+
+
+def _xui_backup_extension(payload: bytes, *, native_database: bool) -> str | None:
+    if _is_sqlite_payload(payload):
+        return '.db'
+    if len(payload) >= 32 and payload.startswith(b'PGDMP'):
+        return '.dump'
+    if not native_database:
+        if payload.startswith(b'PK\x03\x04'):
+            return '.zip'
+        if payload.startswith(b'\x1f\x8b\x08'):
+            return '.gz'
+    return None
 
 
 def _collect_backup_endpoints(panel_type: str) -> list[tuple[str, str]]:
@@ -1011,10 +1021,10 @@ def _collect_backup_endpoints(panel_type: str) -> list[tuple[str, str]]:
 
     if normalized in ('sanaei', 'auto', ''):
         candidates.extend([
-            ('POST', '/panel/api/backup'),
-            ('GET', '/panel/api/backup'),
             ('GET', '/panel/api/server/getDb'),
             ('GET', '/server/getDb'),
+            ('POST', '/panel/api/backup'),
+            ('GET', '/panel/api/backup'),
         ])
     if normalized in ('alireza', 'alireza0', 'xui', 'x-ui', 'auto', ''):
         candidates.extend([
@@ -1027,10 +1037,10 @@ def _collect_backup_endpoints(panel_type: str) -> list[tuple[str, str]]:
         ])
 
     candidates.extend([
-        ('POST', '/panel/api/backup'),
-        ('GET', '/panel/api/backup'),
         ('GET', '/panel/api/server/getDb'),
         ('GET', '/server/getDb'),
+        ('POST', '/panel/api/backup'),
+        ('GET', '/panel/api/backup'),
         ('POST', '/xui/API/backup'),
         ('GET', '/xui/API/backup'),
         ('POST', '/xui/api/backup'),
@@ -1068,22 +1078,25 @@ def _fetch_xui_backup(session_obj: requests.Session, server: 'Server') -> tuple[
         full_url = build_panel_url(server.host, template, {})
         if not full_url:
             continue
+        native_database = template.endswith('/getDb')
         try:
             if method == 'POST':
-                resp = session_obj.post(full_url, verify=verify, timeout=15)
+                resp = session_obj.post(full_url, verify=verify, timeout=15, allow_redirects=False)
             else:
-                resp = session_obj.get(full_url, verify=verify, timeout=15)
+                # PostgreSQL generates the archive before sending the first byte.
+                resp = session_obj.get(full_url, verify=verify, timeout=(5, 120) if native_database else 15,
+                                       allow_redirects=False)
         except Exception as exc:
-            errors.append(f"{method} {template}: {exc}")
+            errors.append(f"{method} {template}: {redact_connection_error(exc)}")
             continue
 
-        payload, ext, err = _extract_backup_bytes_from_response(resp)
+        payload, _, err = _extract_backup_bytes_from_response(resp)
         if payload:
-            if (template.endswith('/getDb') or (ext or '').lower() == '.db') and not _is_sqlite_payload(payload):
-                errors.append(f"{method} {template}: Invalid DB payload")
-                continue
-            return payload, ext, None
-        errors.append(f"{method} {template}: {err or resp.status_code}")
+            ext = _xui_backup_extension(payload, native_database=native_database)
+            if ext:
+                return payload, ext, None
+            err = 'Unrecognized backup format'
+        errors.append(f"{method} {template}: {redact_connection_error(err or resp.status_code)}")
 
     return None, None, '; '.join(errors) or 'No backup endpoint succeeded'
 

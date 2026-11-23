@@ -2800,6 +2800,8 @@ def ensure_background_threads_started():
 
     # Singleton: only one worker runs the scheduler (auto-backup, etc.)
     _start_worker('scheduler', run_scheduler, singleton=True)
+    from panel.services.client_mutation_queue import client_mutation_worker
+    _start_worker('client_mutation_queue', client_mutation_worker, singleton=True)
 
     # Data fetching:
     #  - Redis ON  : ONE worker (singleton) fetches+processes+publishes; the

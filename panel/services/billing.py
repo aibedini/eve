@@ -46,7 +46,14 @@ def _tier_assigned_reseller_ids(tier):
     return ids
 
 
-def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None):
+def _active_price_tiers():
+    return (PriceTier.query
+            .filter_by(is_active=True)
+            .order_by(PriceTier.priority.desc(), PriceTier.server_id.is_not(None).desc(), PriceTier.id.desc())
+            .all())
+
+
+def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None, *, tiers=None):
     """Return the best matching active dynamic pricing tier."""
     volume_gb = float(volume_gb or 0)
     days = float(days or 0)
@@ -55,13 +62,8 @@ def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None
     except Exception:
         reseller_id = None
 
-    tiers = (PriceTier.query
-             .filter_by(is_active=True)
-             .order_by(PriceTier.priority.desc(), PriceTier.server_id.is_not(None).desc(), PriceTier.id.desc())
-             .all())
-
     best_global = None
-    for tier in tiers:
+    for tier in _active_price_tiers() if tiers is None else tiers:
         assigned_ids = _tier_assigned_reseller_ids(tier)
         if assigned_ids:
             if reseller_id is None or reseller_id not in assigned_ids:
@@ -85,14 +87,15 @@ def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None
     return best_global
 
 
-def calculate_tariff_price(volume_gb, days, reseller_id=None, server_id=None, user=None, *, include_duration=True):
+def calculate_tariff_price(volume_gb, days, reseller_id=None, server_id=None, user=None, *,
+                           include_duration=True, tiers=None):
     """Return wallet cost for a reseller, or the system tariff without one."""
     volume_gb, days = float(volume_gb or 0), float(days or 0)
     reseller = user if user and user.role == 'reseller' else None
     if reseller_id and (not reseller or reseller.id != reseller_id):
         candidate = db.session.get(Admin, reseller_id)
         reseller = candidate if candidate and candidate.role == 'reseller' else None
-    tier = _get_applicable_price_tier(volume_gb, days, reseller_id, server_id)
+    tier = _get_applicable_price_tier(volume_gb, days, reseller_id, server_id, tiers=tiers)
     base_gb = int(get_config('cost_per_gb', 0) or 0)
     base_day = int(get_config('cost_per_day', 0) or 0)
     cpg = tier.cost_per_gb if tier and tier.cost_per_gb is not None else base_gb
@@ -117,6 +120,9 @@ def calculate_tariff_price(volume_gb, days, reseller_id=None, server_id=None, us
         day_cost = int(get_config('cost_per_day_unlimited', 0) or 0)
         if reseller:
             day_cost = calculate_reseller_price(reseller, base_price=day_cost, cost_type='day')
+    if not reseller:
+        day_cost = Decimal(str(days)) * cpd if days else int(day_cost)
+        return int(Decimal(str(volume_gb)) * cpg + day_cost), cpg, cpd, tier
     return int(volume_gb * cpg + day_cost), cpg, cpd, tier
 
 
@@ -251,8 +257,16 @@ def _round_money(amount, step=0):
     return int(amount)
 
 
+def package_quote_context(reseller):
+    """Load the pricing inputs shared by all package quotes for one reseller."""
+    contract = db.session.get(ResellerContract, reseller.id)
+    offers = ResellerOffer.query.filter_by(reseller_id=reseller.id).all()
+    return contract, {offer.package_id: offer for offer in offers}, _active_price_tiers()
+
+
 def pricing_quote(reseller, *, package=None, volume_gb=0, days=0, server_id=None,
-                  free=False, sale_amount=None, unlimited=False, include_duration=True):
+                  free=False, sale_amount=None, unlimited=False, include_duration=True,
+                  package_context=None):
     """Resolve retail, money debit and quota debit once, before a panel write."""
     if package is not None:
         volume_gb, days = package.volume or 0, package.days or 0
@@ -260,14 +274,23 @@ def pricing_quote(reseller, *, package=None, volume_gb=0, days=0, server_id=None
     volume_gb = int(volume_gb) if volume_gb == int(volume_gb) else volume_gb
     days = int(days) if days == int(days) else days
     reseller_id = reseller.id if reseller else None
-    contract = db.session.get(ResellerContract, reseller_id) if reseller_id else None
+    if package_context is None:
+        contract = db.session.get(ResellerContract, reseller_id) if reseller_id else None
+        offer = catalog_offer(package, reseller_id) if package else None
+        tiers = None
+    else:
+        contract, offers, tiers = package_context
+        offer = offers.get(package.id)
     policy = contract.policy if contract else {}
     mode = policy.get('mode', 'legacy')
     tier = None
-    offer = catalog_offer(package, reseller_id) if package else None
     if package:
-        retail = customer_package_price(package, reseller_id, offer)
         reference = int(package.price or 0)
+        retail = offer.selling_price if offer and offer.selling_price is not None else reference
+    elif not reseller:
+        reference, _, _, tier = calculate_tariff_price(
+            volume_gb, days, server_id=server_id, include_duration=include_duration)
+        retail = reference
     else:
         reference = int(
             Decimal(str(volume_gb)) * get_config('cost_per_gb')
@@ -292,10 +315,11 @@ def pricing_quote(reseller, *, package=None, volume_gb=0, days=0, server_id=None
         amount = offer.wholesale_price
         mode = 'package_override'
     elif package and package.reseller_cost_mode == 'tariff':
-        amount, _, _, tier = calculate_tariff_price(volume_gb, days, reseller_id, server_id, reseller)
+        amount, _, _, tier = calculate_tariff_price(
+            volume_gb, days, reseller_id, server_id, reseller, tiers=tiers)
         mode = 'tariff'
     elif package and (package.reseller_cost_mode or 'auto') != 'auto':
-        amount = calculate_reseller_price(reseller, package=package, server_id=server_id)
+        amount = calculate_reseller_price(reseller, package=package, server_id=server_id, tiers=tiers)
         mode = package.reseller_cost_mode
     elif mode == 'fixed':
         amount = policy['fixed']
@@ -308,9 +332,9 @@ def pricing_quote(reseller, *, package=None, volume_gb=0, days=0, server_id=None
         amount = _round_money(Decimal(base) * Decimal(str(policy['percent'])) / 100, policy.get('rounding', 0))
     elif mode == 'tier' or not package:
         amount, _, _, tier = calculate_tariff_price(
-            volume_gb, days, reseller_id, server_id, reseller, include_duration=include_duration)
+            volume_gb, days, reseller_id, server_id, reseller, include_duration=include_duration, tiers=tiers)
     else:
-        amount = calculate_reseller_price(reseller, package=package, server_id=server_id)
+        amount = calculate_reseller_price(reseller, package=package, server_id=server_id, tiers=tiers)
     if not 0 <= amount <= 2147483647 or not 0 <= quota <= 2147483647:
         raise ValueError('Price or quota is outside the supported range')
     return {
@@ -328,7 +352,7 @@ def pricing_quote_revision(quote):
     return sha256(json.dumps(quote, sort_keys=True, separators=(',', ':'), default=str).encode()).hexdigest()
 
 
-def calculate_reseller_price(user, base_price=None, package=None, cost_type=None, server_id=None):
+def calculate_reseller_price(user, base_price=None, package=None, cost_type=None, server_id=None, *, tiers=None):
     """
     Calculate price for a reseller based on their settings.
     """
@@ -361,8 +385,8 @@ def calculate_reseller_price(user, base_price=None, package=None, cost_type=None
                 amount = (amount / step).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * step
             return int(amount)
         if mode == 'tariff':
-            return calculate_tariff_price(package.volume, package.days, user.id, server_id, user)[0]
-        tier = _get_applicable_price_tier(package.volume, package.days, user.id, server_id)
+            return calculate_tariff_price(package.volume, package.days, user.id, server_id, user, tiers=tiers)[0]
+        tier = _get_applicable_price_tier(package.volume, package.days, user.id, server_id, tiers=tiers)
         if tier and (tier.reseller_cost_per_gb is not None or tier.reseller_cost_per_day is not None):
             return int((package.volume or 0) * (tier.reseller_cost_per_gb or 0)
                        + (package.days or 0) * (tier.reseller_cost_per_day or 0))

@@ -627,9 +627,11 @@
         schedule(0);
     });
     window.EveRenewals = {
-        begin(operation) {
+        begin(operation, {showResult = true} = {}) {
             merge(Object.assign({state:'submitting',pending:true,confirmed:false,sms:{status:'waiting'},created_at:new Date().toISOString()}, operation));
-            submitting.add(operation.operation_id); open(operation.operation_id);
+            submitting.add(operation.operation_id);
+            if (showResult) open(operation.operation_id);
+            else { renderHistory(); schedule(0); }
         },
         finish(id) { submitting.delete(id); schedule(0); },
         accept, refresh, open, recheck, view,

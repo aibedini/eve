@@ -128,6 +128,9 @@ MAPPING = (
         ['tests.test_reseller_management', 'tests.test_reseller_statement', 'tests.test_package_visibility'],
         ['tests.test_renew_consistency', 'tests.test_telegram_reseller_scoping', 'tests.test_telegram_reseller_bots'],
     )),
+    ('panel/services/client_mutation_queue.py', (
+        ['tests.test_client_mutation_queue'], ['tests.test_renew_consistency', 'tests.test_security_hardening'],
+    )),
     ('panel/routes/packages.py', (
         ['tests.test_reseller_management', 'tests.test_package_visibility'],
         ['tests.test_renew_consistency'],
