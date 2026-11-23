@@ -186,6 +186,7 @@
                 overlay.addEventListener('click', (event) => {
                     if (event.target === overlay || event.target.closest('[data-phone-choice-close]')) {
                         overlay.classList.add('hidden');
+                        window.EveRenewals?.syncSendDialog();
                     }
                 });
             }
@@ -202,10 +203,12 @@
                 btn.addEventListener('click', () => {
                     overlay.classList.add('hidden');
                     onSelect(item);
+                    window.EveRenewals?.syncSendDialog();
                 });
                 container.appendChild(btn);
             });
             overlay.classList.remove('hidden');
+            window.EveRenewals?.syncSendDialog();
             return true;
         }
 
@@ -353,6 +356,7 @@
                             return;
                         }
                         overlay.classList.add('hidden');
+                        window.EveRenewals?.syncSendDialog();
                         const cb = overlay._onSelect;
                         const ph = overlay._phone;
                         if (typeof cb === 'function') cb(channelBtn.dataset.messageChannel, ph);
@@ -360,6 +364,7 @@
                     }
                     if (event.target === overlay || event.target.closest('[data-channel-choice-close]')) {
                         overlay.classList.add('hidden');
+                        window.EveRenewals?.syncSendDialog();
                     }
                 });
             }
@@ -394,6 +399,7 @@
                 copyBtn.style.color = '';
             }
             overlay.classList.remove('hidden');
+            window.EveRenewals?.syncSendDialog();
         }
 
         async function copyClientAccountMessage(button, phone, copyBtn) {
@@ -3299,9 +3305,10 @@
         status.classList.toggle('hidden', clientJobs.size === 0);
     }
 
-    async function watchClientJob(id, state, email) {
+    async function watchClientJob(id, state, email, onState) {
         clientJobs.set(id, {email, state: state === 'running' ? 'running' : 'queued'});
         renderClientJobs();
+        onState?.(state);
         let delay = 350;
         try {
             for (;;) {
@@ -3333,6 +3340,7 @@
                 if (clientJobs.get(id)?.state !== job.state) {
                     clientJobs.set(id, {email, state: job.state});
                     renderClientJobs();
+                    onState?.(job.state);
                 }
                 delay = Math.min(4000, delay * 1.5);
             }
@@ -3342,7 +3350,7 @@
         }
     }
 
-    async function submitClientJob(url, payload, id, email, accepted) {
+    async function submitClientJob(url, payload, id, email, accepted, onState) {
         const options = {method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-Eve-Client-Job': id},
             body: JSON.stringify(payload)};
@@ -3355,9 +3363,9 @@
         }
         if (response.status !== 202) return response;
         const job = await response.json();
-        accepted();
+        accepted?.();
         showToast(_t('Account operation queued for {email}', {email}));
-        return watchClientJob(job.job_id, job.state, email);
+        return watchClientJob(job.job_id, job.state, email, onState);
     }
 
     async function resumeClientJobs() {
@@ -4494,15 +4502,15 @@
         const isCurrent = () => window._renewOperationId === operationId;
         const beforeExpiryText = currentClientExpiryText;
         btn.disabled = true;
+        closeRenewModal();
         window.EveRenewals.begin({operation_id:operationId, server_id:serverId,
-            inbound_id:inboundId, email, days:finalDays, volume_gb:finalVolume}, {showResult: false});
+            inbound_id:inboundId, email, days:finalDays, volume_gb:finalVolume});
 
         try {
             const response = await submitClientJob(
                 `/api/client/${serverId}/${inboundId}/${encodeURIComponent(email)}/renew`,
-                payload, operationId, email, () => {
-                    if (isCurrent()) closeRenewModal();
-                });
+                payload, operationId, email, null,
+                state => window.EveRenewals.updateJobState(operationId, state));
             
             let data = null;
             try {
@@ -4513,7 +4521,7 @@
                 const preview = rawText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
                 data = { success: false, error: _t('Server error (HTTP {v1}){v2}', {v1: response.status, v2: preview ? ': ' + preview : ''}) };
             }
-            if (!isCurrent() || document.querySelector('#add-client-modal:not(.hidden), #edit-client-modal:not(.hidden)')) {
+            if (!isCurrent() || !window.EveRenewals.isOpen(operationId)) {
                 if (data.success) applyClientMutation(data, {serverId, inboundId, email});
                 const localFailure = !data.success && !data.final_state && !data.verify;
                 window.EveRenewals.accept(Object.assign({}, data, {operation_id: operationId, localFailure}),
@@ -4527,8 +4535,6 @@
                 return;
             }
             if (data.success) {
-                closeRenewModal();
-
                 _renderRenewPrevState(email);
                 const beforeExpiry = document.createElement('span');
                 beforeExpiry.textContent = _t(' · Before: {v1}', {v1: beforeExpiryText || 'Not reported'});
@@ -4624,8 +4630,10 @@
             } else if (data.code === 'pricing_changed') {
                 window.EveRenewals.accept(Object.assign({}, data, {operation_id: operationId,
                     localFailure: true, final_state: 'NOT_APPLIED'}), {serverId, inboundId, email, operationId});
+                window.EveRenewals.close();
                 document.getElementById('renew-modal').classList.remove('hidden');
                 btn.disabled = false;
+                btn.focus();
                 window._renewOperationId = clientJobId();
                 if (usePackage) loadRenewPackages({force: true});
                 else calculateRenewCustomPrice();
@@ -4661,7 +4669,7 @@
         } catch (error) {
             // The POST may have reached EVE and the panel even though its response was
             // lost. Keep the same operation id and recover with read-only verification.
-            if (isCurrent()) showRenewInProgress(serverId, inboundId, email, {
+            if (isCurrent() && window.EveRenewals.isOpen(operationId)) showRenewInProgress(serverId, inboundId, email, {
                 operation_id: payload.operation_id,
                 note: 'Transport interrupted. Checking the existing renewal…',
                 awaiting_original_request: true

@@ -17,6 +17,8 @@
 
 /* Durable renewal progress and activity, shared by every authenticated page. */
 .modal-overlay.renew-progress-overlay { z-index: 1100; }
+body > #phone-choice-modal,
+body > #message-channel-choice-modal { z-index: 1110; }
 .renew-progress-overlay .renew-progress-dialog {
     max-width: 600px;
     max-height: min(90svh, 860px);

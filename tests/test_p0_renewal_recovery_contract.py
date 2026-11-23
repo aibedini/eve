@@ -48,6 +48,15 @@ class RenewalRecoveryContractTests(unittest.TestCase):
         self.assertNotIn("resolveFallbackRenewTotal", submit)
         self.assertNotIn("patch.up = 0", submit)
 
+    def test_renewal_and_send_keep_progress_open_until_operator_dismisses_it(self):
+        submit = DASHBOARD.split("async function submitRenewal() {", 1)[1].split("function showCreditAwareError", 1)[0]
+        self.assertIn("window.EveRenewals.begin(", submit)
+        self.assertNotIn("showResult: false", submit)
+        self.assertIn("!window.EveRenewals.isOpen(operationId)", submit)
+        send = PROGRESS.split("case 'send': {", 1)[1].split("break;", 1)[0]
+        self.assertIn("window.sendRenewToUser();", send)
+        self.assertNotIn("close();", send)
+
 
 if __name__ == "__main__":
     unittest.main()

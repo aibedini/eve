@@ -459,7 +459,7 @@ class RenewProgressActionsTests(unittest.TestCase):
             const byId = id => {if(!nodes.has(id))nodes.set(id,element(id));return nodes.get(id);};
             const document = {activeElement:null,createElement:()=>element('')};
             const window = {sendRenewToUser(){}};
-            const operations = new Map(), busy = new Set();
+            const operations = new Map(), busy = new Set(), submitting = new Set();
             let selected='one';
             const fa=false;
             const t=key=>key;

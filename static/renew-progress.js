@@ -27,6 +27,8 @@
         applied: ['Renewal applied', 'تمدید اعمال شد'], verify: ['Verify account', 'تأیید وضعیت حساب'],
         submitting: ['Submitting renewal', 'در حال ثبت درخواست تمدید'],
         submittingBody: ['Waiting for EVE to record the request. Updates appear here automatically.', 'در انتظار ثبت درخواست؛ وضعیت واقعی به‌صورت خودکار اینجا نمایش داده می‌شود.'],
+        renewalQueued: ['Renewal queued', 'تمدید در صف است'],
+        renewalQueuedBody: ['The request is saved and will run when a slot is available.', 'درخواست ثبت شد و به محض آزادشدن نوبت اجرا می‌شود.'],
         updatingBody: ['The request is saved. Waiting for the server update.', 'درخواست ثبت شده است؛ منتظر پاسخ پنل برای اعمال تمدید هستیم.'],
         verifying: ['Confirming renewal', 'در حال تأیید تمدید'],
         verifyingBody: ['The panel accepted the update. Confirming expiry, traffic and activation.', 'پنل درخواست تغییرات را پذیرفته است؛ انقضا، حجم و فعال‌بودن حساب بررسی می‌شود.'],
@@ -138,7 +140,9 @@
     let selected = null, filter = 'all', timer = null, polling = false, opener = null;
     let permitted = true;
     const activity = byId('renew-activity-modal');
+    const sendDialogSelector = '#phone-choice-modal, #message-channel-choice-modal';
     const visible = el => !el.classList.contains('hidden');
+    const openSendDialog = () => [...document.querySelectorAll(sendDialogSelector)].find(visible);
     const text = (id, value) => { byId(id).textContent = value == null ? '' : String(value); };
     const toggle = (id, show) => byId(id).classList.toggle('hidden', !show);
 
@@ -246,11 +250,16 @@
         else if (state === 'AUTH_DEGRADED') { key = 'auth'; phase = 1; }
         else if (state === 'NOT_APPLIED' || operation.state === 'failed') { key = 'failed'; tone = 'danger'; phase = 1; }
         else if (state === 'UNKNOWN' || operation.state === 'needs_reconciliation') { key = 'unknown'; phase = 1; }
-        else if (operation.state === 'submitting') { key = 'submitting'; tone = 'primary'; phase = 0; }
+        else if (operation.state === 'submitting') {
+            key = operation.jobState === 'queued' ? 'renewalQueued'
+                : operation.jobState === 'running' ? 'updating' : 'submitting';
+            tone = 'primary';
+            phase = operation.jobState ? 1 : 0;
+        }
         else if (['reserved', 'prepared'].includes(operation.state)) { key = 'updating'; tone = 'primary'; phase = 1; }
         else if (operation.state === 'panel_applied') { key = 'verifying'; tone = 'primary'; }
         const updated = Date.parse(operation.updated_at || operation.created_at || '');
-        if (tone === 'primary' && Number.isFinite(updated) && now - updated > 15000) {
+        if (tone === 'primary' && key !== 'renewalQueued' && Number.isFinite(updated) && now - updated > 15000) {
             key = 'delayed'; tone = 'warning';
         }
         const detail = (operation.reason_codes || []).filter(code => reasons[code]).map(code => reasons[code][fa ? 1 : 0]).join(' ');
@@ -316,7 +325,7 @@
         text('renew-operation-copy', canCopy ? operation.copy_text : '');
         text('renew-operation-done', t(operation.confirmed || operation.state === 'failed' ? 'done' : 'background'));
         text('renew-operation-background-note', t(operation.confirmed || operation.state === 'failed' ? 'historyNote' : 'backgroundNote'));
-        byId('renew-operation-recheck').disabled = busy.has(selected);
+        byId('renew-operation-recheck').disabled = busy.has(selected) || submitting.has(selected) && operation.state === 'submitting';
         toggle('renew-operation-repair', Boolean(operation.repairable));
         byId('renew-operation-repair').disabled = busy.has(selected);
         text('renew-operation-recheck', t(busy.has(selected) ? 'checking' : 'recheck'));
@@ -366,7 +375,8 @@
     function show(overlay) {
         if (!visible(root) && !visible(activity)) opener = document.activeElement;
         [...document.body.children].forEach(el => {
-            if (el !== root && el !== activity && !['SCRIPT', 'STYLE', 'LINK'].includes(el.tagName)) {
+            if (el !== root && el !== activity && !el.matches(sendDialogSelector)
+                && !['SCRIPT', 'STYLE', 'LINK'].includes(el.tagName)) {
                 if (!inerted.has(el)) inerted.set(el, el.inert);
                 el.inert = true;
             }
@@ -377,6 +387,7 @@
     }
     function close() {
         [root, activity].forEach(el => el.classList.add('hidden'));
+        root.inert = false;
         inerted.forEach((value, el) => { el.inert = value; }); inerted.clear();
         if (opener && opener.isConnected && opener.getClientRects().length) opener.focus();
         else byId('renew-activity-trigger')?.focus();
@@ -385,6 +396,18 @@
     function open(id) {
         if (!operations.has(id)) return;
         selected = id; render(); show(root);
+    }
+
+    function syncSendDialog() {
+        if (!visible(root)) return;
+        const dialog = openSendDialog();
+        const wasInert = root.inert;
+        root.inert = Boolean(dialog);
+        if (dialog && !dialog.contains(document.activeElement)) {
+            dialog.querySelector('.modal-close')?.focus();
+        } else if (!dialog && wasInert) {
+            byId('renew-operation-send').focus();
+        }
     }
     function merge(operation) {
         if (!operation || !operation.operation_id) return;
@@ -603,7 +626,7 @@
                 window.renderRenewApiStatus({operation_id:op.operation_id,final_state:op.final_state,
                     business_finalized:true,sending_allowed:true,copy_text:op.copy_text,tpl_vars:op.tpl_vars},
                 {serverId:op.server_id,inboundId:op.inbound_id,email:op.email});
-                close(); window.sendRenewToUser();
+                window.sendRenewToUser();
             }
             break;
         }
@@ -611,9 +634,15 @@
     });
     byId('renew-activity-search').addEventListener('input', renderHistory);
     document.addEventListener('keydown', event => {
-        const overlay = visible(root) ? root : visible(activity) ? activity : null;
+        const sendDialog = visible(root) ? openSendDialog() : null;
+        const overlay = sendDialog || (visible(root) ? root : visible(activity) ? activity : null);
         if (!overlay) return;
-        if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); close(); }
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            if (sendDialog) sendDialog.querySelector('.modal-close')?.click();
+            else close();
+        }
         if (event.key === 'Tab') {
             const items = [...overlay.querySelectorAll('button:not(:disabled), input, summary')].filter(el => el.getClientRects().length);
             const first = items[0], last = items[items.length - 1];
@@ -627,14 +656,25 @@
         schedule(0);
     });
     window.EveRenewals = {
-        begin(operation, {showResult = true} = {}) {
+        begin(operation) {
             merge(Object.assign({state:'submitting',pending:true,confirmed:false,sms:{status:'waiting'},created_at:new Date().toISOString()}, operation));
             submitting.add(operation.operation_id);
-            if (showResult) open(operation.operation_id);
-            else { renderHistory(); schedule(0); }
+            open(operation.operation_id);
         },
-        finish(id) { submitting.delete(id); schedule(0); },
-        accept, refresh, open, recheck, view,
+        updateJobState(id, state) {
+            const operation = operations.get(id);
+            if (operation?.state !== 'submitting') return;
+            operation.jobState = state;
+            if (selected === id) render();
+            renderHistory();
+        },
+        isOpen(id) { return selected === id && visible(root); },
+        finish(id) {
+            submitting.delete(id);
+            if (selected === id) render();
+            schedule(0);
+        },
+        accept, refresh, open, close, recheck, view, syncSendDialog,
     };
     schedule(0);
 }());
