@@ -407,6 +407,7 @@ class PriceTier(db.Model):
     # assigned_reseller_ids stores a JSON list for multi-reseller rules.
     reseller_id = db.Column(db.Integer, nullable=True, index=True)
     assigned_reseller_ids = db.Column(db.Text, default='[]')
+    applies_to_system = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     server_id = db.Column(db.Integer, nullable=True, index=True)
     priority = db.Column(db.Integer, default=0)  # higher = evaluated first
     is_active = db.Column(db.Boolean, default=True)
@@ -433,6 +434,7 @@ class PriceTier(db.Model):
             'reseller_cost_per_day': self.reseller_cost_per_day,
             'reseller_id': self.reseller_id,
             'assigned_reseller_ids': assigned,
+            'applies_to_system': bool(self.applies_to_system),
             'server_id': self.server_id,
             'priority': self.priority,
             'is_active': self.is_active,

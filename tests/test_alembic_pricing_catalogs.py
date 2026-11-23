@@ -2,6 +2,7 @@
 import importlib.util
 import unittest
 from pathlib import Path
+from runpy import run_path
 
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
@@ -37,5 +38,24 @@ class PricingCatalogMigrationTests(unittest.TestCase):
                 self.assertTrue({'quota_mib', 'pricing_quote', 'billing_admin_id'} <= columns)
                 columns = {column['name'] for column in inspector.get_columns('telegram_service_sessions')}
                 self.assertIn('pricing_quote', columns)
+        finally:
+            engine.dispose()
+
+    def test_system_scope_upgrade_preserves_existing_reseller_assignments(self):
+        path = Path(__file__).resolve().parents[1] / 'alembic/versions/3a48bd75e9c1_system_price_tiers.py'
+        migration = run_path(str(path))
+        engine = sa.create_engine('sqlite://')
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    'CREATE TABLE price_tiers (id INTEGER PRIMARY KEY, assigned_reseller_ids TEXT)')
+                connection.exec_driver_sql(
+                    'INSERT INTO price_tiers VALUES (?, ?)', (1, '[42]'))
+                with Operations.context(MigrationContext.configure(connection)):
+                    migration['upgrade']()
+                    migration['upgrade']()
+                row = connection.exec_driver_sql(
+                    'SELECT assigned_reseller_ids, applies_to_system FROM price_tiers').one()
+                self.assertEqual(row, ('[42]', 0))
         finally:
             engine.dispose()

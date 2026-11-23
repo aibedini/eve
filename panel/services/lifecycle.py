@@ -89,6 +89,40 @@ def resolve_client_uuid(client) -> str | None:
     return None
 
 
+def cached_client_uuid(server_id, email: str, inbound_id=None):
+    """Best-effort stable identity for an email-addressed cached client.
+
+    Four legacy mutation paths (traffic reset, superadmin edit, bulk repair)
+    address a client by email only. Before falling back to the email as the
+    service identity, look the UUID up in the shared snapshot so those paths
+    advance the SAME generation as a renewal of the same service."""
+    email_l = (email or '').strip().lower()
+    if not email_l:
+        return None
+    try:
+        sid = int(server_id)
+    except (TypeError, ValueError):
+        return None
+    try:
+        for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
+            try:
+                if int(inbound.get('server_id', -1)) != sid:
+                    continue
+                if inbound_id is not None and int(inbound.get('id', -1)) != inbound_id:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            for client in (inbound.get('clients') or []):
+                if (client.get('email') or '').strip().lower() != email_l:
+                    continue
+                identity = resolve_client_uuid(client)
+                if identity:
+                    return identity
+    except Exception:
+        return None
+    return None
+
+
 def client_uuid_from_email(email: str) -> str | None:
     """Best durable identity available for an email-only call site.
 

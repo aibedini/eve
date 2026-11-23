@@ -65,8 +65,9 @@ def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None
     best_global = None
     for tier in _active_price_tiers() if tiers is None else tiers:
         assigned_ids = _tier_assigned_reseller_ids(tier)
-        if assigned_ids:
-            if reseller_id is None or reseller_id not in assigned_ids:
+        scoped = assigned_ids or tier.applies_to_system
+        if scoped:
+            if not (tier.applies_to_system if reseller_id is None else reseller_id in assigned_ids):
                 continue
         elif best_global is not None:
             continue
@@ -81,7 +82,7 @@ def _get_applicable_price_tier(volume_gb, days, reseller_id=None, server_id=None
             continue
         if tier.max_days is not None and days >= tier.max_days:
             continue
-        if assigned_ids:
+        if scoped:
             return tier
         best_global = tier
     return best_global
@@ -174,6 +175,13 @@ def pricing_owner(server_id, client_uuid=None, email=None, *, inbound_id=None):
             if len(owners) == 1:
                 return owners[0][0]
     return None
+
+
+def renewal_pricing_owner(server_id, email, inbound_id):
+    from panel.services.lifecycle import cached_client_uuid
+
+    return pricing_owner(server_id, cached_client_uuid(server_id, email, inbound_id),
+                         email, inbound_id=inbound_id)
 
 
 def creation_reseller_id(actor, selected=None):

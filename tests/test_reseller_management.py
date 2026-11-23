@@ -254,6 +254,68 @@ class ResellerManagementTests(unittest.TestCase):
                         pricing_quote(None, volume_gb=volume, days=31, server_id=self.server.id)))
         self.assertEqual(pricing_quote(self.reseller, volume_gb=10, days=31)['amount'], 90000)
 
+    def test_system_can_share_reseller_price_tiers_without_making_them_global(self):
+        from panel.services.billing import pricing_quote
+
+        db.session.add(SystemConfig(key='cost_per_gb', value='15000'))
+        db.session.commit()
+        rules = [(0, 20, 13000), (20, 30, 11500), (30, 50, 10667),
+                 (50, 100, 9800), (100, None, 8900)]
+        tier_ids = []
+        for lower, upper, rate in rules:
+            response = self.client.post('/api/price-tiers', json={
+                'name': f'{lower} GB', 'min_volume_gb': lower, 'max_volume_gb': upper,
+                'cost_per_gb': rate, 'assigned_reseller_ids': [self.reseller.id],
+            })
+            tier_ids.append(response.get_json()['id'])
+        self.assertEqual(pricing_quote(None, volume_gb=10, days=31)['amount'], 150000)
+        for tier_id in tier_ids:
+            tier = self.client.put(f'/api/price-tiers/{tier_id}', json={'applies_to_system': True}).get_json()['tier']
+            self.assertTrue(tier['applies_to_system'])
+            self.assertEqual(tier['assigned_reseller_ids'], [self.reseller.id])
+
+        for purpose in ('create', 'renew'):
+            for volume, rate in ((10, 13000), (20, 11500), (30, 10667), (50, 9800), (100, 8900)):
+                with self.subTest(purpose=purpose, volume=volume):
+                    quote = self.client.get('/api/packages/min-price', query_string={
+                        'purpose': purpose, 'server_id': self.server.id, 'volume_gb': volume, 'days': 31,
+                    }).get_json()
+                    self.assertEqual(quote['min_price'], volume * rate)
+        self.assertEqual(pricing_quote(self.reseller, volume_gb=10, days=31)['amount'], 130000)
+        self.assertEqual(pricing_quote(self.other, volume_gb=10, days=31)['amount'], 150000)
+
+    def test_renewal_preview_resolves_same_reseller_as_submission_by_cached_uuid(self):
+        from panel.core.redis_client import GLOBAL_SERVER_DATA
+
+        legacy, service = self._ownership()
+        db.session.delete(legacy)
+        service.client_email_snapshot = 'previous-account-name'
+        db.session.add_all([
+            PriceTier(name='Assigned', reseller_id=self.reseller.id, cost_per_gb=13000),
+            SystemConfig(key='cost_per_gb', value='15000'),
+        ])
+        self.reseller.credit = 500000
+        db.session.commit()
+        snapshot = {'inbounds': [{'id': 1, 'server_id': self.server.id, 'clients': [
+            {'email': 'S17-Azin', 'uuid': service.client_uuid},
+        ]}]}
+        with patch.dict(GLOBAL_SERVER_DATA, snapshot), \
+                patch('app.get_xui_session', return_value=(None, 'no panel traffic in this test')) as panel:
+            quote = self.client.get('/api/packages/min-price', query_string={
+                'purpose': 'renew', 'server_id': self.server.id, 'inbound_id': 1,
+                'email': 'S17-Azin', 'volume_gb': 10, 'days': 31,
+            }).get_json()
+            self.assertEqual(quote['min_price'], 130000)
+            response = self.client.post(f'/api/client/{self.server.id}/1/S17-Azin/renew', json={
+                'operation_id': 'cached-owner-test', 'mode': 'custom', 'days': 31, 'volume': 10,
+                'quote_revision': quote['quote_revision'],
+            })
+            panel.assert_called_once()
+            self.assertEqual(response.get_json()['error'], 'no panel traffic in this test')
+        operation = ClientOperation.query.filter_by(idempotency_key='cached-owner-test').one()
+        self.assertEqual(operation.amount, 130000)
+        self.assertEqual(operation.billing_admin_id, self.reseller.id)
+
     def test_panel_package_list_loads_reseller_pricing_once(self):
         from sqlalchemy import event
 

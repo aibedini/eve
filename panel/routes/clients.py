@@ -26,7 +26,10 @@ from panel.models import (
 from panel.routes.common import admin_is_superadmin, login_required, permission_required
 from panel.security import outbound_tls_verify, panel_tls_verify
 from panel.services import client_operations as client_operations_state
-from panel.services.billing import creation_reseller_id, package_allowed_in_panel, pricing_owner, pricing_quote, pricing_quote_revision
+from panel.services.billing import (
+    creation_reseller_id, package_allowed_in_panel, pricing_owner, pricing_quote,
+    pricing_quote_revision, renewal_pricing_owner,
+)
 from panel.services.client_mutation_queue import enqueue_dashboard_mutation, job_status, pending_jobs
 from panel.services.client_operations import (
     begin_client_operation, complete_client_operation, fail_client_operation,
@@ -138,42 +141,6 @@ def check_sender_card_payment():
 _RENEWAL_SOURCES = ('explicit_renew', 'admin_reset', 'telegram_renew', 'api_mutation')
 
 
-def _cached_client_uuid(server_id, email: str, inbound_id=None):
-    """Best-effort stable identity for an email-addressed cached client.
-
-    Four legacy mutation paths (traffic reset, superadmin edit, bulk repair)
-    address a client by email only. Before falling back to the email as the
-    service identity, look the UUID up in the shared snapshot so those paths
-    advance the SAME generation as a renewal of the same service."""
-    from panel.core.redis_client import GLOBAL_SERVER_DATA  # deferred: shared snapshot
-
-    email_l = (email or '').strip().lower()
-    if not email_l:
-        return None
-    try:
-        sid = int(server_id)
-    except (TypeError, ValueError):
-        return None
-    try:
-        for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
-            try:
-                if int(inbound.get('server_id', -1)) != sid:
-                    continue
-                if inbound_id is not None and int(inbound.get('id', -1)) != inbound_id:
-                    continue
-            except (TypeError, ValueError):
-                continue
-            for client in (inbound.get('clients') or []):
-                if (client.get('email') or '').strip().lower() != email_l:
-                    continue
-                identity = lifecycle_service.resolve_client_uuid(client)
-                if identity:
-                    return identity
-    except Exception:
-        return None
-    return None
-
-
 def _note_restoration(server, email: str, event_type: str, operation_id=None) -> None:
     """Advance the lifecycle generation after a non-renewal restoration.
 
@@ -185,7 +152,7 @@ def _note_restoration(server, email: str, event_type: str, operation_id=None) ->
     try:
         lifecycle_service.note_service_lifecycle_change(
             server_id=getattr(server, 'id', server),
-            client_uuid=_cached_client_uuid(getattr(server, 'id', server), email),
+            client_uuid=lifecycle_service.cached_client_uuid(getattr(server, 'id', server), email),
             client_email=email,
             event_type=event_type,
             operation_id=operation_id,
@@ -534,7 +501,8 @@ def reset_client_traffic(server_id, inbound_id):
             return jsonify({"success": False, "error": "Billable volume required"}), 400
     try:
         payer = _pricing_payer(user, pricing_owner(
-            server_id, _cached_client_uuid(server_id, email, inbound_id), email, inbound_id=inbound_id))
+            server_id, lifecycle_service.cached_client_uuid(server_id, email, inbound_id), email,
+            inbound_id=inbound_id))
         quote = pricing_quote(payer, volume_gb=volume_gb, server_id=server_id,
                               free=is_free or not volume_gb, include_duration=False)
     except ValueError as exc:
@@ -1866,8 +1834,7 @@ def renew_client(server_id, inbound_id, email, *, order_quote=None):
         return int(number) if number.is_integer() else number
 
     try:
-        reseller_id = pricing_owner(
-            server_id, _cached_client_uuid(server_id, email, inbound_id), email, inbound_id=inbound_id)
+        reseller_id = renewal_pricing_owner(server_id, email, inbound_id)
         if order_quote is not None and reseller_id is None:
             reseller_id = order_quote.get('reseller_id')
         payer = _pricing_payer(user, _support_pricing_owner(user, reseller_id))

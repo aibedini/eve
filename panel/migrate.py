@@ -629,11 +629,10 @@ def _ensure_alembic_current():
     with db.engine.connect() as conn:
         current = MigrationContext.configure(conn).get_current_revision()
     if current is None:
-        # Schema is already current via create_all + legacy catch-up above —
-        # adopt the Alembic ledger without replaying the baseline.
-        command.stamp(cfg, 'head')
-    else:
-        command.upgrade(cfg, 'head')
+        # The legacy catch-up covers the schema through the queue revision.
+        # Later revisions still need to run for existing, unstamped tables.
+        command.stamp(cfg, '19d49347f3c2')
+    command.upgrade(cfg, 'head')
 
 
 def run_migrations():

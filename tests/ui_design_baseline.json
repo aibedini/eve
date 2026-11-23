@@ -137,11 +137,11 @@
       "style_display": 0
     },
     "packages.html": {
-      "bare_checkbox": 3,
+      "bare_checkbox": 2,
       "emoji": 7,
       "hardcoded_colors": 3,
-      "inline_styles": 42,
-      "inline_text_ink": 21,
+      "inline_styles": 35,
+      "inline_text_ink": 19,
       "style_display": 10
     },
     "pulse.html": {

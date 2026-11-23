@@ -16,10 +16,21 @@ from panel.services.billing import (
     _get_applicable_price_tier, _tier_assigned_reseller_ids, calculate_reseller_price,
     calculate_tariff_price, reseller_sub_package_ids,
     catalog_offer, creation_reseller_id, customer_package_price, customer_package_visible, package_allowed_in_panel,
-    package_in_catalog, package_quote_context, pricing_owner, pricing_quote, pricing_quote_revision,
+    package_in_catalog, package_quote_context, pricing_quote, pricing_quote_revision,
+    renewal_pricing_owner,
 )
 
 bp = Blueprint('packages', __name__)
+
+
+def _renewal_reseller_id(user, server_id):
+    owner = renewal_pricing_owner(server_id, request.args.get('email'),
+                                  request.args.get('inbound_id', type=int)) if server_id else None
+    if user.role == 'reseller':
+        if owner is not None and owner != user.id:
+            raise PermissionError('Account is outside your reseller scope')
+        return user.id
+    return owner
 
 
 def _optional_cost(value):
@@ -85,9 +96,11 @@ def get_packages():
             return jsonify(success=False, error=str(exc)), 403
         except (ValueError, TypeError) as exc:
             return jsonify(success=False, error=str(exc)), 400
-    if purpose == 'renew' and server_id and user.role != 'reseller':
-        reseller_id = pricing_owner(server_id, email=request.args.get('email'),
-                                    inbound_id=request.args.get('inbound_id', type=int))
+    if purpose == 'renew':
+        try:
+            reseller_id = _renewal_reseller_id(user, server_id)
+        except PermissionError as exc:
+            return jsonify(success=False, error=str(exc)), 403
     payer = db.session.get(Admin, reseller_id) if reseller_id else None
     query = Package.query
     if purpose or request.args.get('include_archived') != '1' or not has_permission(user, 'content.manage'):
@@ -623,13 +636,11 @@ def package_min_price():
         return jsonify(success=False, error='Invalid volume or duration'), 400
 
     if request.args.get('purpose') in ('create', 'renew'):
-        reseller_id = user.id if user.role == 'reseller' else None
-        if request.args['purpose'] == 'renew' and reseller_id is None and server_id:
-            reseller_id = pricing_owner(server_id, email=request.args.get('email'),
-                                        inbound_id=request.args.get('inbound_id', type=int))
         try:
             if request.args['purpose'] == 'create':
                 reseller_id = creation_reseller_id(user, request.args.get('reseller_id'))
+            else:
+                reseller_id = _renewal_reseller_id(user, server_id)
             payer = db.session.get(Admin, reseller_id) if reseller_id else None
             quote = pricing_quote(payer, volume_gb=volume_gb, days=days, server_id=server_id,
                                   unlimited=request.args.get('unlimited') == '1')
@@ -675,7 +686,8 @@ def list_price_tiers():
     tiers = PriceTier.query.order_by(PriceTier.priority.desc(), PriceTier.id).all()
     if reseller_id:
         tiers = [tier for tier in tiers
-                 if not (assigned := _tier_assigned_reseller_ids(tier)) or reseller_id in assigned]
+                 if reseller_id in (assigned := _tier_assigned_reseller_ids(tier))
+                 or (not assigned and not tier.applies_to_system)]
     return jsonify({'success': True, 'tiers': [t.to_dict() for t in tiers]})
 
 
@@ -703,6 +715,7 @@ def create_price_tier():
             reseller_cost_per_day=_optional_cost(data.get('reseller_cost_per_day')),
             reseller_id=assigned_ids[0] if len(assigned_ids) == 1 else None,
             assigned_reseller_ids=json.dumps(assigned_ids),
+            applies_to_system=data.get('applies_to_system') is True,
             server_id=int(data['server_id']) if data.get('server_id') else None,
             priority=int(data.get('priority') or 0),
             is_active=bool(data.get('is_active', True)),
@@ -747,6 +760,8 @@ def update_price_tier(tier_id):
             tier.reseller_id = assigned_ids[0] if len(assigned_ids) == 1 else None
         if 'server_id' in data:
             tier.server_id = int(data['server_id']) if data['server_id'] else None
+        if 'applies_to_system' in data:
+            tier.applies_to_system = data['applies_to_system'] is True
         if 'is_active' in data:
             tier.is_active = bool(data['is_active'])
         with db.session.no_autoflush:
@@ -774,9 +789,13 @@ def _validate_tier_ranges(tier):
     if not tier.is_active:
         return
     ids = _tier_assigned_reseller_ids(tier)
+    global_scope = not ids and not tier.applies_to_system
     for other in PriceTier.query.filter_by(is_active=True, server_id=tier.server_id, priority=tier.priority or 0):
         other_ids = _tier_assigned_reseller_ids(other)
-        if other.id == tier.id or (ids or other_ids) and not ids.intersection(other_ids):
+        same_scope = ((global_scope and not other_ids and not other.applies_to_system)
+                      or (tier.applies_to_system and other.applies_to_system)
+                      or ids.intersection(other_ids))
+        if other.id == tier.id or not same_scope:
             continue
         try:
             existing = ranges(other)
