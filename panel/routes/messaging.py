@@ -16,10 +16,11 @@ from panel.extensions import db
 from panel.models import (Admin, OPEN_NOTIFICATION_STATUSES, PendingSms,
                           ServiceNotificationEvent, ServiceObservedState, SmsScanDecision,
                           SmsGatewayEvent, SmsScanRun, SmsSendLog, SystemConfig)
-from sqlalchemy import or_, func
+from sqlalchemy import and_, or_, func
 from panel.routes.common import permission_required
 from panel.security import outbound_tls_verify
 from panel.services import gmweb_contract
+from panel.services.telemetry_state import DEVICE_WAIT_REASONS, MAX_ATTEMPTS
 from panel.services.gmweb_transport_probe import (
     PROBE_AUTH_FAILED, PROBE_CONNECTED, PROBE_CONTRACT_MISSING, PROBE_DIAGNOSTICS,
     PROBE_INVALID, PROBE_NOT_CONFIGURED, PROBE_RATE_LIMITED, PROBE_SCOPE_DENIED,
@@ -811,6 +812,12 @@ def sms_notification_debt():
     active = OPEN_NOTIFICATION_STATUSES
     query = ServiceNotificationEvent.query.filter(
         ServiceNotificationEvent.status.in_(active))
+    legacy_offline = 'http_503: android_gateway_unreachable'
+    last_error = func.coalesce(ServiceNotificationEvent.last_error, '')
+    waiting_device_filter = or_(ServiceNotificationEvent.status == 'gateway_accepted',
+                                last_error.in_(DEVICE_WAIT_REASONS), last_error.startswith(legacy_offline, autoescape=True))
+    attention_filter = and_(ServiceNotificationEvent.notification_kind.in_(('volume_ended', 'expired')),
+                            ServiceNotificationEvent.attempt_count >= MAX_ATTEMPTS, ~waiting_device_filter)
     total = query.count()
     terminal = query.filter(ServiceNotificationEvent.notification_kind.in_(
         ('volume_ended', 'expired'))).count()
@@ -830,15 +837,9 @@ def sms_notification_debt():
                               or_(ServiceNotificationEvent.last_error.like('gateway_%'),
                                   ServiceNotificationEvent.last_error.like('gmweb_%')))
     elif obligation_filter == 'waiting_device':
-        listed = query.filter(or_(
-            ServiceNotificationEvent.status == 'gateway_accepted',
-            ServiceNotificationEvent.last_error.in_(
-                ('android_offline', 'android_stale', 'no_recent_device_pull',
-                 'task_waiting_no_device'))))
+        listed = query.filter(waiting_device_filter)
     elif obligation_filter == 'needs_attention':
-        listed = query.filter(
-            ServiceNotificationEvent.notification_kind.in_(('volume_ended', 'expired')),
-            ServiceNotificationEvent.attempt_count >= 7)
+        listed = query.filter(attention_filter)
     elif obligation_filter == 'retrying':
         listed = query.filter(ServiceNotificationEvent.status == 'retry')
     elif obligation_filter is None:
@@ -867,16 +868,13 @@ def sms_notification_debt():
     coverage_counts = coverage['counts']
     policy_reasons = ('quiet_hours', 'hourly_limit_reached', 'daily_limit_reached',
                       'cooldown_active', 'manual_review_pending')
-    device_reasons = ('android_offline', 'android_stale', 'no_recent_device_pull',
-                      'task_waiting_no_device')
     waiting_policy = query.filter(ServiceNotificationEvent.last_error.in_(policy_reasons)).count()
     waiting_gateway = query.filter(
         ServiceNotificationEvent.status != 'gateway_accepted',
         or_(ServiceNotificationEvent.last_error.like('gateway_%'),
             ServiceNotificationEvent.last_error.like('gmweb_%'))).count()
-    waiting_device = query.filter(or_(
-        ServiceNotificationEvent.status == 'gateway_accepted',
-        ServiceNotificationEvent.last_error.in_(device_reasons))).count()
+    waiting_device = query.filter(waiting_device_filter).count()
+    needs_attention = query.filter(attention_filter).count()
     data = []
     for row in rows:
         item = row.to_dict()
@@ -890,14 +888,15 @@ def sms_notification_debt():
             item['age_quality'] = quality
             item['age_seconds'] = age_seconds
         item['needs_attention'] = (row.notification_kind in ('volume_ended', 'expired')
-                                   and int(row.attempt_count or 0) >= 7)
+                                   and int(row.attempt_count or 0) >= MAX_ATTEMPTS
+                                   and row.status != 'gateway_accepted'
+                                   and row.last_error not in DEVICE_WAIT_REASONS
+                                   and not (row.last_error or '').startswith(legacy_offline))
         data.append(item)
     response = jsonify({
         'success': True, 'active': total, 'terminal': terminal,
         'retrying': query.filter(ServiceNotificationEvent.status == 'retry').count(),
-        'needs_attention': query.filter(
-            ServiceNotificationEvent.notification_kind.in_(('volume_ended', 'expired')),
-            ServiceNotificationEvent.attempt_count >= 7).count(),
+        'needs_attention': needs_attention,
         'oldest_age_seconds': (max(0, int((datetime.utcnow() - oldest).total_seconds()))
                                if oldest else None),
         'coverage_gap_count': coverage['fresh_gap_count'],
@@ -908,9 +907,7 @@ def sms_notification_debt():
             'waiting_gateway': waiting_gateway,
             'waiting_device': waiting_device,
             'retrying': query.filter(ServiceNotificationEvent.status == 'retry').count(),
-            'needs_attention': query.filter(
-                ServiceNotificationEvent.notification_kind.in_(('volume_ended', 'expired')),
-                ServiceNotificationEvent.attempt_count >= 7).count(),
+            'needs_attention': needs_attention,
         },
         'coverage': {
             'current_terminal_accounts': coverage['current_terminal_accounts'],

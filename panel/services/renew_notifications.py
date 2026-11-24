@@ -63,7 +63,7 @@ def start_renewal_notification(operation, tpl_vars, comment='', *, sender=None):
     try:
         (sender or _default_sender)(
             'renew', operation.server_id, operation.client_email, None, None,
-            dict(tpl_vars, _renew_notification_key=key), comment,
+            dict(tpl_vars, _renew_notification_key=key, _renew_inbound_id=operation.inbound_id), comment,
             _server_name(operation.server_id))
     except Exception:
         result = client_operations.operation_response(operation)
@@ -153,7 +153,8 @@ def send_renewal_confirmation_once(operation, *, activation_converged,
 
     send = sender or _default_sender
     try:
-        message_vars = dict(tpl_vars, _renew_notification_key=notification_key(operation))
+        message_vars = dict(tpl_vars, _renew_notification_key=notification_key(operation),
+                            _renew_inbound_id=operation.inbound_id)
         send('renew', operation.server_id, operation.client_email,
              None, None, message_vars, stored.get('client_comment') or '',
              _server_name(operation.server_id))

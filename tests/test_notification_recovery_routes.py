@@ -5,6 +5,7 @@ from unittest import mock
 from tests.test_telemetry_state_transitions import app_module, db
 from panel.models import Admin, ServiceNotificationEvent
 from panel.services import notification_recovery
+from panel.services.telemetry_state import MAX_ATTEMPTS
 
 
 class RecoveryRouteTests(unittest.TestCase):
@@ -105,6 +106,30 @@ class RecoveryRouteTests(unittest.TestCase):
             self.assertIsNotNone(event.next_attempt_at)
         finally:
             db.session.delete(event)
+            db.session.commit()
+
+    def test_offline_and_queued_events_do_not_require_attention(self):
+        self._login()
+        states = [('gateway_accepted', None), ('retry', 'android_gateway_unreachable'),
+                  ('retry', 'http_503: android_gateway_unreachable'), ('retry', 'gateway_failed')]
+        events = [ServiceNotificationEvent(
+            event_id=f'offline-test-{idx}', service_key=f'offline-test-{idx}', server_id=4,
+            state='expired', notification_kind='expired', state_version=1, lifecycle_generation=0,
+            source='transition', status=status, attempt_count=MAX_ATTEMPTS, last_error=reason,
+        ) for idx, (status, reason) in enumerate(states)]
+        db.session.add_all(events)
+        db.session.commit()
+        try:
+            base = '/api/sms/notification-debt?q=offline-test'
+            wait = self.client.get(base + '&filter=waiting_device').json
+            attention = self.client.get(base + '&filter=needs_attention').json
+            self.assertEqual(wait['obligation_summary']['waiting_device'], 3)
+            self.assertEqual(attention['needs_attention'], 1)
+            self.assertEqual(attention['obligation_summary']['needs_attention'], 1)
+            self.assertEqual(attention['obligations_total'], 1)
+        finally:
+            for event in events:
+                db.session.delete(event)
             db.session.commit()
 
     def test_waiting_gateway_uses_real_worker_reason_codes(self):

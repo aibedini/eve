@@ -2302,7 +2302,7 @@ def _comment_opted_out(comment: str | None, *tags: str) -> bool:
         return False
     for t in tags:
         core = re.escape(t.lstrip('#').lower())
-        if re.search(r'#\s*' + core, s):
+        if re.search(r'#\s*' + core + r'(?![\w-])', s):
             return True
     return False
 
@@ -2316,12 +2316,14 @@ def _sms_comment_opted_out(comment: str | None) -> bool:
 
 
 def _sms_account_opted_out(server_id, email: str, fallback_comment: str = '',
-                           refresh_shared: bool = False) -> bool:
+                           refresh_shared: bool = False, *, inbound_id=None) -> bool:
     """Re-check the newest cached comment before handing an SMS to GMweb.
 
     Queue candidates carry a comment snapshot which can become stale while they
     wait behind pacing/rate limits. In Redis mode, pull any newer server block,
-    then inspect every matching copy of the account. If the account is not in the
+    then inspect matching copies of the account. A known inbound narrows an
+    email collision to the selected account and other copies with its UUID.
+    If the account is not in the
     cache yet (e.g. a just-created client), fall back to the event comment.
     """
     if refresh_shared:
@@ -2334,7 +2336,8 @@ def _sms_account_opted_out(server_id, email: str, fallback_comment: str = '',
     except (TypeError, ValueError):
         sid = server_id
     email_l = (email or '').strip().lower()
-    found = False
+    matching = []
+    selected = []
     for inbound in (GLOBAL_SERVER_DATA.get('inbounds') or []):
         try:
             if int(inbound.get('server_id', -1)) != int(sid):
@@ -2345,17 +2348,29 @@ def _sms_account_opted_out(server_id, email: str, fallback_comment: str = '',
         for client in (inbound.get('clients') or []):
             if (client.get('email') or '').strip().lower() != email_l:
                 continue
-            found = True
-            if _sms_comment_opted_out(client.get('comment')):
+            if inbound_id is None and _sms_comment_opted_out(client.get('comment')):
                 return True
-    return _sms_comment_opted_out(fallback_comment) if not found else False
+            matching.append(client)
+            if inbound_id is not None and str(inbound.get('id')) == str(inbound_id):
+                selected.append(client)
+    if selected:
+        def identity(client):
+            return (lifecycle_service.resolve_client_uuid(client.get('raw_client'))
+                    or lifecycle_service.resolve_client_uuid(client))
+
+        identities = {value for client in selected if (value := identity(client))}
+        return any(_sms_comment_opted_out(client.get('comment')) for client in selected) or any(
+            identity(client) in identities and _sms_comment_opted_out(client.get('comment'))
+            for client in matching)
+    return (any(_sms_comment_opted_out(client.get('comment')) for client in matching)
+            if matching else _sms_comment_opted_out(fallback_comment))
 
 
 def _toggle_optout_tags(comment: str | None, add: bool) -> str:
     """Add or remove the #nosms #nopm opt-out tags in a client comment, preserving
     any phone number / other notes already there. Idempotent (existing tags are
     stripped first, then re-added only when add=True)."""
-    cleaned = re.sub(r'\s*#\s*(?:nosms|nopm)(?![a-z0-9])', '', comment or '',
+    cleaned = re.sub(r'\s*#\s*(?:nosms|nopm)(?![\w-])', '', comment or '',
                      flags=re.IGNORECASE).strip()
     if add:
         return (cleaned + ' #nosms #nopm').strip()
@@ -3303,7 +3318,8 @@ def _fire_automation_sms(event_name: str, server_id, email: str, template_type: 
                 # night. Only the bulk depletion scan honours the quiet window.
                 # Final fail-closed check after queueing/rate gates. The comment
                 # may have changed since this background thread was created.
-                if _sms_account_opted_out(server_id, email, recipient_comment, refresh_shared=True):
+                if _sms_account_opted_out(server_id, email, recipient_comment, refresh_shared=True,
+                                          inbound_id=tpl_vars.get('_renew_inbound_id')):
                     _log(recipient, 'skipped', 'opted_out_recheck')
                     return
                 segment_info = _sms_segment_info(text)
@@ -3371,7 +3387,7 @@ def _normalize_sms_scan_states(raw_states) -> list[str]:
 
 
 def _sms_gateway_ready(cfg: dict | None = None) -> tuple[bool, str | None, int | None]:
-    """Return whether GMweb is paired/ready before draining rate-limit budget."""
+    """Return whether GMweb can accept SMS submissions into its queue."""
     cfg = cfg or _get_sms_runtime_settings()
     base = (cfg.get('base_url') or '').strip().rstrip('/')
     api_key = (cfg.get('api_key') or '').strip()
@@ -3385,6 +3401,16 @@ def _sms_gateway_ready(cfg: dict | None = None) -> tuple[bool, str | None, int |
         )
     except Exception as exc:
         return False, f'gateway_ready_failed: {exc}', None
+    if resp.status_code in (200, 503):
+        try:
+            body = resp.json()
+        except (TypeError, ValueError):
+            body = None
+        status = body.get('status') if isinstance(body, dict) else None
+        if isinstance(status, dict) and isinstance(status.get('queueAccepting'), bool):
+            if status['queueAccepting']:
+                return True, None, resp.status_code
+            return False, 'gateway_not_accepting', resp.status_code
     if resp.status_code == 200:
         return True, None, resp.status_code
     if resp.status_code == 401:
@@ -4208,6 +4234,15 @@ def _deliver_depletion_event_impl(event, *, cfg, templates, cooldown_hours, job_
                                       correlation_id=meta.get('correlationId'))
         return 'sent', False
     _sms_refund_daily_segments(segments)
+    # Old GMweb versions refuse submission before queuing when Android is offline.
+    if (res.get('status_code') == 503 and res.get('error_code') == 'android_gateway_unreachable'
+            and not res.get('request_id')):
+        event.attempt_count = max(0, int(event.attempt_count or 0) - 1)
+        telemetry_state.mark_skipped(event, 'android_gateway_unreachable',
+                                    retry_in=res.get('retry_after_seconds') or 60, status_code=503)
+        _sms_log_row(jid, email_l, sid, _server_display_name(sid), state, recipient,
+                     'deferred', 'android_gateway_unreachable', res)
+        return 'deferred', True
     reason = res.get('reason') or 'send_failed'
     _sms_log_row(jid, email_l, sid, _server_display_name(sid), state, recipient,
                  'failed', reason, res,

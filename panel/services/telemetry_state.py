@@ -482,6 +482,8 @@ def _open_event(*, service_key, server_id, identity, state, previous_state,
 CLAIMABLE_STATUSES = ('pending', 'retry')
 LEASE_STATUS = 'sending'
 MAX_ATTEMPTS = len(NOTIFICATION_BACKOFF_SECONDS) + 1
+DEVICE_WAIT_REASONS = ('android_gateway_unreachable', 'android_offline', 'android_stale',
+                       'no_recent_device_pull', 'task_waiting_no_device')
 #: Kinds whose fact stays true after the retry ladder is spent ("you ran out", "you
 #: expired"), so they keep retrying at one hour instead of being retired. Every other
 #: kind ("low volume") describes a moment that a later state supersedes, so a message
@@ -673,6 +675,7 @@ def mark_sent(event, *, response=None, correlation_id=None, gateway_request_id=N
 def mark_gateway_accepted(event, *, gateway_request_id, correlation_id=None) -> None:
     """Gateway acceptance is outstanding debt, not delivery confirmation."""
     event.status = 'gateway_accepted'
+    event.last_error = None
     event.gateway_request_id = str(gateway_request_id)[:128]
     event.correlation_id = str(correlation_id or event.correlation_id or '')[:64] or None
     event.next_attempt_at = datetime.utcnow() + timedelta(minutes=1)

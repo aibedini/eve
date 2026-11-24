@@ -202,6 +202,19 @@ class ProgressRouteTests(unittest.TestCase):
         self.assertTrue(renew_progress.snapshot(op)['confirmed'])
         self.assertEqual(self.client.post('/api/client-operations/renewals/not-mine/recheck-sms').status_code, 404)
 
+    def test_confirmed_opt_out_status_rechecks_locally_without_a_gateway_request(self):
+        op = self.operation()
+        db.session.add(SmsSendLog(email=op.client_email, server_id=0, state='renew', status='skipped',
+            reason='opted_out_recheck', eve_notification_id=renew_progress.notification_id(op)))
+        db.session.commit()
+        with patch('panel.jobs.messaging._refresh_pending_sms_statuses') as refresh:
+            response = self.client.post('/api/client-operations/renewals/mine/recheck-sms')
+            refresh.assert_not_called()
+        self.assertTrue(response.json['success'])
+        self.assertFalse(response.json['gateway_checked'])
+        self.assertTrue(response.json['operation']['confirmed'])
+        self.assertFalse(response.json['operation']['sms']['retryable'])
+
     def test_explicit_recheck_reads_delivery_receipt_after_gateway_acceptance(self):
         from panel.jobs import messaging
         op = self.operation()

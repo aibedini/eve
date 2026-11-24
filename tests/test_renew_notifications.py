@@ -61,6 +61,27 @@ def _business_payload(**overrides):
     return payload
 
 
+class RenewalSmsOptOutTests(unittest.TestCase):
+    def test_opt_out_matches_exact_tags_and_the_renewed_service(self):
+        from panel.jobs import messaging
+
+        shared_email = 'same@example.test'
+        inbounds = [
+            {'id': 1, 'server_id': 4, 'clients': [
+                {'id': 'renewed', 'email': shared_email, 'comment': '#nosms-note #nopm_history'}]},
+            {'id': 2, 'server_id': 4, 'clients': [
+                {'id': 'different', 'email': shared_email, 'comment': '#nosms'}]},
+            {'id': 3, 'server_id': 4, 'clients': [
+                {'id': 'renewed', 'email': shared_email, 'comment': ''}]},
+        ]
+        with mock.patch.dict(messaging.GLOBAL_SERVER_DATA, inbounds=inbounds):
+            self.assertFalse(messaging._sms_account_opted_out(4, shared_email, inbound_id=1))
+            self.assertTrue(messaging._sms_account_opted_out(4, shared_email, inbound_id=2))
+            inbounds[2]['clients'][0]['comment'] = 'Honor #NoPM.'
+            self.assertTrue(messaging._sms_account_opted_out(4, shared_email, inbound_id=1))
+        self.assertEqual(messaging._toggle_optout_tags('#nosms-note #nosms', False), '#nosms-note')
+
+
 class ConfirmationSenderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

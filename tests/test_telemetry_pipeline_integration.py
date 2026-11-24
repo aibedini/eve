@@ -184,8 +184,8 @@ class PipelineIntegrationTests(unittest.TestCase):
         with mock.patch.object(messaging, '_get_sms_runtime_settings', lambda: cfg), \
                 mock.patch.object(messaging, '_get_monitor_settings_cached',
                                   lambda _cfg: monitor), \
-                mock.patch.object(messaging, '_sms_gateway_ready',
-                                  lambda *a, **k: (True, None, 200)), \
+                mock.patch.object(messaging.requests, 'get', return_value=mock.Mock(
+                    status_code=503, json=lambda: {'ready': False, 'status': {'queueAccepting': True}})), \
                 mock.patch.object(messaging, '_sms_in_quiet_hours', lambda *a, **k: False), \
                 mock.patch.object(messaging, '_recent_bot_message_within',
                                   lambda *a, **k: False), \

@@ -527,25 +527,26 @@
         checkFeedback.set(id,{message:t('checkingBoth'),tone:'checking'}); renderCheckFeedback();
         try {
             const results = await Promise.allSettled([
-                request(`/api/client/${op.server_id}/${op.inbound_id}/${encodeURIComponent(op.email)}/renew/verify`, {
+                op.confirmed && !forceEnable ? Promise.resolve(null) : request(`/api/client/${op.server_id}/${op.inbound_id}/${encodeURIComponent(op.email)}/renew/verify`, {
                     method:'POST',body:JSON.stringify({operation_id:id,awaiting_result:true,force_enable:Boolean(forceEnable)})},true),
                 request('/api/client-operations/renewals/' + encodeURIComponent(id) + '/recheck-sms', {method:'POST',body:'{}'})
             ]);
             const errors = [];
             if (results[1].status === 'fulfilled') merge(results[1].value.operation);
             else errors.push(explainError(results[1].reason,operations.get(id),false));
-            if (results[0].status === 'fulfilled') {
+            if (results[0].status === 'fulfilled' && results[0].value) {
                 const data = results[0].value;
                 if (typeof window.applyClientMutation === 'function') window.applyClientMutation(data,{serverId:op.server_id,inboundId:op.inbound_id,email:op.email});
                 accept(data,{serverId:op.server_id,inboundId:op.inbound_id,email:op.email,operationId:id});
-            } else errors.push(explainError(results[0].reason,operations.get(id),false));
+            } else if (results[0].status === 'rejected') errors.push(explainError(results[0].reason,operations.get(id),false));
             await refresh();
             const current = operations.get(id) || op;
             const changed = before !== JSON.stringify([current.final_state,current.confirmed,current.sms]);
             const status = view(current,Date.now()).title + ' · ' + t(notificationView(current).key);
-            const key = errors.length === 2 ? 'checkFailed' : errors.length ? 'checkPartial' : changed ? 'checkUpdated' : 'checkUnchanged';
+            const failed = errors.length === 2 || (op.confirmed && !forceEnable && errors.length === 1);
+            const key = failed ? 'checkFailed' : errors.length ? 'checkPartial' : changed ? 'checkUpdated' : 'checkUnchanged';
             checkFeedback.set(id,{message:t(key,{time:formatCheckTime(new Date()),status,error:errors.join(' ')}),
-                tone:errors.length === 2 ? 'error' : errors.length || !current.confirmed
+                tone:failed ? 'error' : errors.length || !current.confirmed
                     || ['failed','skipped','unknown','manual_review','dispatch_pending','stalled'].includes(notificationView(current).status)
                     || ['unconfirmed','unavailable'].includes(current.sms?.delivery_state) ? 'warning'
                     : current.sms?.status === 'delivered' ? 'success' : 'checking'});
