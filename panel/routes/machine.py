@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 from functools import wraps
 from uuid import uuid4
@@ -15,8 +16,10 @@ from panel.models import CustomerAccount, ServiceOwnership
 from panel.models.machine import MachinePhoneLookup, MachineProposal
 from panel.models.core import RenewalEvent
 from panel.services import machine_context as context
+from panel.services.machine_inventory import contact_pepper_tag, email_lookup_hash, service_inventory
 from panel.services.machine_security import (
-    authenticate, check_network, configured_secret, phone_lookup_hash, timestamp, utcnow,
+    authenticate, check_network, configured_secret, phone_lookup_hash, private_service_identity, public_service_key,
+    timestamp, utcnow,
 )
 
 bp = Blueprint('machine', __name__, url_prefix='/machine/v1')
@@ -120,24 +123,44 @@ def health():
 @bp.get('/customers/<int:customer_id>', provide_automatic_options=False)
 @scope('context.customer.read')
 def get_customer(customer_id):
-    return envelope(**context.customer_views([customer(customer_id)])[0])
+    return envelope(**customer_views([customer(customer_id)])[0])
+
+
+def customer_views(rows):
+    return context.customer_views(rows, include_name='context.customer.read_name' in g.machine_scopes)
+
+
+def lookup_values(name):
+    values = request.args.getlist(name)
+    if set(request.args) != {name} or not 1 <= len(values) <= 100:
+        abort(400)
+    return values
 
 
 @bp.get('/customers:lookup', provide_automatic_options=False)
 @scope('context.customer.read')
 def lookup_customer():
-    value = request.args.get('phone_hash', '')
-    if (set(request.args) != {'phone_hash'} or len(request.args.getlist('phone_hash')) != 1
-            or not re.fullmatch(r'[0-9a-f]{64}', value)):
+    values = lookup_values('phone_hash')
+    if any(not re.fullmatch(r'[0-9a-f]{64}', value) for value in values):
         abort(400)
     pepper = configured_secret('EVE_MACHINE_PHONE_PEPPER')
     if not pepper:
         abort(503)
-    rows = CustomerAccount.query.join(MachinePhoneLookup).filter(
-        MachinePhoneLookup.phone_hash == value).limit(100).all()
-    # Recompute against the current contact and pepper before exposing any match.
-    rows = [row for row in rows if phone_lookup_hash(row.primary_phone, pepper) == value]
-    return envelope(items=[dict(item, match_basis='phone_hash') for item in context.customer_views(rows)])
+    lookup = db.select(
+        MachinePhoneLookup.customer_id, MachinePhoneLookup.phone_hash,
+        func.row_number().over(partition_by=MachinePhoneLookup.phone_hash,
+                               order_by=MachinePhoneLookup.customer_id).label('rank'),
+    ).where(MachinePhoneLookup.phone_hash.in_(set(values))).subquery()
+    rows = db.session.execute(db.select(CustomerAccount, lookup.c.phone_hash).join(
+        lookup, lookup.c.customer_id == CustomerAccount.id).where(lookup.c.rank <= 100).order_by(CustomerAccount.id))
+    # Recompute using the current phone and pepper before exposing a match.
+    verified = [(row, digest) for row, digest in rows if phone_lookup_hash(row.primary_phone, pepper) == digest]
+    by_hash = defaultdict(list)
+    for (_, digest), item in zip(verified, customer_views([row for row, _ in verified])):
+        by_hash[digest].append(dict(item, match_basis='phone_hash'))
+    if len(values) == 1:
+        return envelope(items=by_hash[values[0]])
+    return envelope(items=[{'index': index, 'items': by_hash[value]} for index, value in enumerate(values)])
 
 
 @bp.get('/customers', provide_automatic_options=False)
@@ -158,7 +181,7 @@ def customers():
                                  and_(CustomerAccount.updated_at == value, CustomerAccount.id > int(row_id))))
     rows = query.order_by(CustomerAccount.updated_at, CustomerAccount.id).limit(count + 1).all()
     next_cursor = f'{timestamp(rows[count - 1].updated_at)}~{rows[count - 1].id}' if len(rows) > count else None
-    return envelope(items=context.customer_views(rows[:count]), next_cursor=next_cursor)
+    return envelope(items=customer_views(rows[:count]), next_cursor=next_cursor)
 
 
 @bp.get('/customers/<int:customer_id>/services', provide_automatic_options=False)
@@ -175,16 +198,70 @@ def get_service(service_key):
     return envelope(**context.service_views([service(service_key)])[0])
 
 
+@bp.get('/services', provide_automatic_options=False)
+@scope('context.service.read')
+def services():
+    count = limit(50)
+    inventory = service_inventory()
+    stamp, server, identity = inventory.c.updated_at, inventory.c.server_id, inventory.c.client_uuid
+    query = db.select(inventory)
+    if since := request.args.get('updated_since'):
+        query = query.where(stamp >= parse_time(since))
+    if cursor := request.args.get('cursor'):
+        date, separator, key = cursor.partition('~')
+        decoded = private_service_identity(key) if separator else None
+        if not decoded:
+            abort(400)
+        at = parse_time(date)
+        query = query.where(or_(stamp > at, and_(stamp == at, or_(
+            server > decoded[0], and_(server == decoded[0], identity > decoded[1])))))
+    rows = db.session.execute(query.order_by(stamp, server, identity).limit(count + 1)).all()
+    items = context.service_views(rows[:count])
+    cursor = f'{timestamp(rows[count - 1].updated_at)}~{items[-1]["service_key"]}' if len(rows) > count else None
+    return envelope(items=items, next_cursor=cursor)
+
+
 @bp.get('/services:lookup', provide_automatic_options=False)
 @scope('context.service.read')
 def lookup_service():
-    email = request.args.get('client_email', '').strip()
-    if not email or len(email) > 255 or any(ord(char) < 32 for char in email):
+    inventory = service_inventory()
+    if 'phone_hash' in request.args:
+        digests = lookup_values('phone_hash')
+        if len(digests) != 1 or not re.fullmatch(r'[0-9a-f]{64}', digests[0]):
+            abort(400)
+        pepper = configured_secret('EVE_MACHINE_PHONE_PEPPER')
+        if not pepper:
+            abort(503)
+        matches = db.session.execute(db.select(inventory).where(inventory.c.phone_hash == digests[0],
+                                                               inventory.c.contact_pepper == contact_pepper_tag(pepper))
+                                     .order_by(inventory.c.server_id, inventory.c.client_uuid)).all()
+        return envelope(items=context.service_views(matches))
+
+    emails = [value.strip() for value in lookup_values('client_email')]
+    if any(not email or len(email) > 255 or any(ord(char) < 32 for char in email) for email in emails):
         abort(400)
-    rows = context.active_services().filter(func.lower(ServiceOwnership.client_email_snapshot) == email.lower()).limit(2).all()
-    if len(rows) != 1:
-        abort(404)
-    return envelope(**context.service_views(rows)[0])
+    emails = [email.lower() for email in emails]
+    by_digest = {email_lookup_hash(email): email for email in emails}
+    fallback = func.lower(inventory.c.client_email_snapshot)
+    rows = db.session.execute(db.select(inventory).where(or_(inventory.c.email_hash.in_(set(by_digest)),
+        and_(inventory.c.email_hash.is_(None), fallback.in_(set(emails)))))).all()
+    matches = defaultdict(list)
+    for row in rows:
+        email = by_digest[row.email_hash] if row.email_hash else row.client_email_snapshot.lower()
+        matches[email].append(row)
+    if len(emails) == 1:
+        rows = matches[emails[0]]
+        if not rows:
+            abort(404)
+        if len(rows) > 1:
+            abort(409)
+        return envelope(**context.service_views(rows)[0])
+    by_email = {email: {'status': 409} for email, matching_rows in matches.items() if len(matching_rows) > 1}
+    unique = [(email, matching_rows[0]) for email, matching_rows in matches.items() if len(matching_rows) == 1]
+    for (email, _), item in zip(unique, context.service_views([owner for _, owner in unique])):
+        by_email[email] = {'status': 200, 'item': item}
+    return envelope(items=[dict(by_email.get(email, {'status': 404}), index=index)
+                           for index, email in enumerate(emails)])
 
 
 @bp.get('/services/<service_key>/renewals', provide_automatic_options=False)

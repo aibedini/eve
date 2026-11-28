@@ -34,6 +34,20 @@ class MachinePhoneLookup(db.Model):
     phone_hash = db.Column(db.String(64), nullable=False, index=True)
 
 
+class MachineServiceIndex(db.Model):
+    __tablename__ = 'machine_service_index'
+    server_id = db.Column(db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), primary_key=True)
+    client_uuid = db.Column(db.String(100), primary_key=True)
+    legacy_id = db.Column(db.Integer, index=True)
+    email_hash = db.Column(db.String(64), index=True)
+    phone_hash = db.Column(db.String(64), index=True)
+    contact_pepper = db.Column(db.String(64))
+    snapshot_revision = db.Column(db.String(64))
+    reseller_id = db.Column(db.Integer)
+    updated_at = db.Column(db.DateTime, nullable=False)
+    __table_args__ = (db.Index('ix_machine_service_cursor', 'updated_at', 'server_id', 'client_uuid'),)
+
+
 class MachineEvent(db.Model):
     __tablename__ = 'machine_events'
     id = db.Column(db.String(40), primary_key=True)

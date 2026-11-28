@@ -23,7 +23,7 @@ from panel.security.network import FORWARDED_HEADERS, client_ip, trusted_proxy_p
 SCOPES = (
     'context.customer.read', 'context.service.read', 'context.renewal.read',
     'context.payment.read_masked', 'context.support.read', 'context.knowledge.read',
-    'proposals.write',
+    'proposals.write', 'context.customer.read_name',
 )
 KEY_RE = re.compile(r'Bearer eve_mk_([a-f0-9]{32})\.([A-Za-z0-9_-]{43})', re.IGNORECASE)
 RATE_LIMIT = 120

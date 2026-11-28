@@ -1,5 +1,6 @@
 {
   "public_key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+  "key_encoding": "Hex-decode public_key_hex to 32 zero bytes for these vectors. In production, use the UTF-8 bytes of the configured string directly.",
   "phone": [
     {
       "input": "0912 123 4567",

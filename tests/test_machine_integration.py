@@ -19,11 +19,13 @@ os.environ['DATABASE_URL'] = 'sqlite:///' + (Path(_DB.name) / 'machine.db').as_p
 os.environ.update(FLASK_ENV='development', DISABLE_BACKGROUND_THREADS='1', EVE_SKIP_IMPORT_MIGRATIONS='1')
 
 from app import app, db  # noqa: E402
-from panel.models import (Admin, ClientOperation, CustomerAccount, OwnershipClaim, RenewalEvent, Server,
+from panel.models import (Admin, ClientOperation, ClientOwnership, CustomerAccount, OwnershipClaim, RenewalEvent, Server,
                           ServiceLifecycleState, ServiceOwnership, TelegramIdentity, Transaction)  # noqa: E402
-from panel.models.machine import MachineAPIKey, MachineEvent, MachineProposal  # noqa: E402
+from panel.models.machine import MachineAPIKey, MachineEvent, MachineProposal, MachineServiceIndex  # noqa: E402
+from panel.core.redis_client import GLOBAL_SERVER_DATA  # noqa: E402
 from panel.models.support import SupportChat  # noqa: E402
 from panel.services import machine_events as events, machine_security as security  # noqa: E402
+from panel.services.machine_inventory import legacy_identity, rebuild_service_index  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parents[1] / 'docs/contracts/eve-god-ai-v1-vectors.json'
 VECTORS = json.loads(FIXTURE.read_text(encoding='utf-8'))
@@ -50,12 +52,13 @@ class MachineIntegrationTests(unittest.TestCase):
             'EVE_MACHINE_SERVICE_KEY_SECRET': secrets.token_hex(32),
             'EVE_GOD_AI_ORIGIN': 'https://god-internal.test',
             'EVE_GOD_AI_WEBHOOK_SECRET': secrets.token_hex(32),
+            'EVE_GOD_AI_CA_FILE': '',
         })
         self.env.start()
         self.addCleanup(self.env.stop)
         self.client = app.test_client()
         with app.app_context():
-            for model in (MachineEvent, MachineProposal, MachineAPIKey, SupportChat, OwnershipClaim,
+            for model in (MachineEvent, MachineProposal, MachineAPIKey, MachineServiceIndex, ClientOwnership, SupportChat, OwnershipClaim,
                           TelegramIdentity, ServiceLifecycleState, RenewalEvent, ClientOperation,
                           Transaction, ServiceOwnership, CustomerAccount, Server, Admin):
                 model.query.delete()
@@ -76,7 +79,10 @@ class MachineIntegrationTests(unittest.TestCase):
                 db.session.add(RenewalEvent(server_id=panel.id, sub_id='never-export-subscription-id',
                                             client_uuid=self.identity, verified=verified, days=31,
                                             volume_bytes=10 * 1024 ** 3))
-            _, self.token = security.issue_key('integration', security.SCOPES, 15, admin.id)
+            standard_scopes = [scope for scope in security.SCOPES if scope != 'context.customer.read_name']
+            _, self.token = security.issue_key('integration', standard_scopes, 15, admin.id)
+            _, self.with_name = security.issue_key('name reader', ['context.customer.read', 'context.customer.read_name'], 15, admin.id)
+            _, self.name_only = security.issue_key('name only', ['context.customer.read_name'], 15, admin.id)
             _, self.restricted = security.issue_key('support', ['context.support.read'], 15, admin.id)
             expired, self.expired = security.issue_key('expired', ['context.customer.read'], 15, admin.id)
             expired.expires_at = security.utcnow() - timedelta(seconds=1)
@@ -114,7 +120,7 @@ class MachineIntegrationTests(unittest.TestCase):
     def test_machine_routes_expose_only_context_and_proposals(self):
         paths = {
             '/health', '/customers/<int:customer_id>', '/customers:lookup', '/customers/<int:customer_id>/services',
-            '/services/<service_key>', '/services:lookup', '/services/<service_key>/renewals',
+            '/services', '/services/<service_key>', '/services:lookup', '/services/<service_key>/renewals',
             '/customers/<int:customer_id>/payments', '/customers/<int:customer_id>/support-requests',
             '/ownership-claims', '/knowledge/faqs', '/sms/notifications/<service_key>', '/customers', '/proposals',
         }
@@ -203,6 +209,7 @@ class MachineIntegrationTests(unittest.TestCase):
             events.deliver_due(http, url, secret, count=1, clock=lambda: 100)
             request = http.post.call_args.kwargs
             self.assertFalse(request['allow_redirects'])
+            self.assertIs(request['verify'], True)
             self.assertEqual(request['headers']['X-Eve-Delivery-Id'], delivery)
             row = db.session.get(MachineEvent, delivery)
             self.assertEqual(row.attempts, 1)
@@ -292,13 +299,169 @@ class MachineIntegrationTests(unittest.TestCase):
         self.assertEqual(self.api('/customers:lookup?phone_hash=' + old).json['items'], [])
         self.assertEqual(self.api('/customers:lookup?phone_hash=' + new).json['items'][0]['customer_id'], self.customer_id)
 
+    def test_name_scope_and_batched_phone_hashes(self):
+        pepper = security.configured_secret('EVE_MACHINE_PHONE_PEPPER')
+        digest = security.phone_lookup_hash('09121234567', pepper)
+        detail = f'/customers/{self.customer_id}'
+        self.assertEqual(self.api(detail, self.name_only).status_code, 403)
+        self.assertEqual(self.api(detail).json['display_name'], '••••')
+        customer = self.api(detail, self.with_name).json
+        self.assertEqual(customer['display_name'], 'Private name')
+        self.assertEqual(customer['primary_phone_masked'], '••••4567')
+        self.assertEqual(self.api('/customers', self.with_name).json['items'][0]['display_name'], 'Private name')
+
+        query = [('phone_hash', digest), ('phone_hash', '0' * 64), ('phone_hash', digest)]
+        query.extend(('phone_hash', f'{index:064x}') for index in range(1, 98))
+        phone_lookup = '/customers:lookup'
+        result = self.api(phone_lookup, self.with_name, query_string=query)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(len(result.json['items']), 100)
+        first, missing, duplicate = result.json['items'][:3]
+        self.assertEqual(first['items'][0]['display_name'], 'Private name')
+        self.assertEqual(first['items'][0]['primary_phone_masked'], '••••4567')
+        self.assertEqual(missing, {'index': 1, 'items': []})
+        self.assertEqual(duplicate, {'index': 2, 'items': first['items']})
+        self.assertEqual(self.api(phone_lookup, query_string=query).json['items'][0]['items'][0]['display_name'], '••••')
+        self.assertEqual(self.api(phone_lookup, query_string=query + query[:1]).status_code, 400)
+        self.assertEqual(self.api(phone_lookup, query_string=query[:1] + [('phone_hash', 'bad')]).status_code, 400)
+
+    def test_service_lookup_distinguishes_ambiguity_in_single_and_batch(self):
+        with app.app_context():
+            for email in ('ambiguous', 'AMBIGUOUS'):
+                db.session.add(ServiceOwnership(customer_id=self.customer_id, server_id=self.server_id,
+                                                client_uuid=str(uuid4()), client_email_snapshot=email))
+            db.session.commit()
+        lookup = '/services:lookup'
+        self.assertEqual(self.api(lookup + '?client_email=unknown').status_code, 404)
+        self.assertEqual(self.api(lookup + '?client_email=Ambiguous').status_code, 409)
+        query = [('client_email', email) for email in ['CUSTOMER-PRIVATE', 'unknown', 'ambiguous', 'customer-private']]
+        query.extend(('client_email', f'missing-{index}') for index in range(96))
+        response = self.api(lookup, query_string=query)
+        self.assertEqual(response.status_code, 200)
+        rows = response.json['items']
+        self.assertEqual(len(rows), 100)
+        self.assertEqual([row['status'] for row in rows[:4]], [200, 404, 409, 200])
+        self.assertEqual(rows[0]['item']['service_key'], self.service_key)
+        self.assertEqual(rows[1], {'index': 1, 'status': 404})
+        self.assertEqual(rows[2], {'index': 2, 'status': 409})
+        self.assertEqual(rows[3]['item'], rows[0]['item'])
+        self.assertEqual(self.api(lookup, query_string=query + query[:1]).status_code, 400)
+        self.assertEqual(self.api(lookup, query_string=query[:1] + [('client_email', '')]).status_code, 400)
+
+    def test_outbox_uses_configured_ca_and_retries_if_unavailable(self):
+        with app.app_context():
+            row = MachineEvent.query.first()
+            delivery = row.id
+            url, secret = events.webhook_config()
+            http = MagicMock()
+            http.post.side_effect = OSError('unavailable CA bundle')
+            with patch.dict(os.environ, EVE_GOD_AI_CA_FILE='/internal/god-ai-ca.pem'):
+                events.deliver_due(http, url, secret, count=1)
+            self.assertEqual(http.post.call_args.kwargs['verify'], '/internal/god-ai-ca.pem')
+            row = db.session.get(MachineEvent, delivery)
+            self.assertEqual(row.attempts, 1)
+            self.assertIsNone(row.delivered_at)
+            self.assertGreater(row.next_attempt_at, security.utcnow())
+
+    def test_full_inventory_paging_contact_lookup_and_legacy_identity(self):
+        legacy_uuid, unowned_uuid = str(uuid4()), str(uuid4())
+        with app.app_context():
+            legacy = ClientOwnership(reseller_id=self.admin_id, server_id=self.server_id,
+                                     inbound_id=1, client_email='legacy-service')
+            db.session.add(legacy)
+            db.session.add(ClientOwnership(reseller_id=self.admin_id, server_id=self.server_id,
+                                           client_uuid=self.identity, client_email='customer-private'))
+            db.session.commit()
+            old_key = security.public_service_key(self.server_id, legacy_identity(legacy.id))
+        inbounds = [{'server_id': self.server_id, 'id': 1, 'clients': [
+            {'id': self.identity, 'email': 'customer-private', 'comment': '09121234567'},
+            {'id': legacy_uuid, 'email': 'legacy-service', 'comment': '۰۹۱۲۱۲۳۴۵۶۷ #nosms'},
+            {'id': unowned_uuid, 'email': 'user_09121234567', 'comment': '09121234568'},
+        ]}]
+        statuses = [{'server_id': self.server_id, 'success': True}]
+        with patch.dict(GLOBAL_SERVER_DATA, inbounds=inbounds, servers_status=statuses):
+            with app.app_context():
+                pepper = security.configured_secret('EVE_MACHINE_PHONE_PEPPER')
+                rebuild_service_index(pepper)
+                self.assertEqual(MachineServiceIndex.query.count(), 3)
+            expected = {self.service_key: self.customer_id,
+                        security.public_service_key(self.server_id, legacy_uuid): None,
+                        security.public_service_key(self.server_id, unowned_uuid): None}
+            cursor = None
+            collected = []
+            for _ in expected:
+                page = self.api('/services', query_string={'limit': 1, 'cursor': cursor or ''}).json
+                collected.extend(page['items'])
+                cursor = page['next_cursor']
+            self.assertIsNone(cursor)
+            self.assertEqual({row['service_key']: row['customer_id'] for row in collected}, expected)
+            self.assertEqual(self.api('/services?updated_since=9999-01-01T00:00:00Z').json['items'], [])
+            self.assertEqual(self.api('/services?cursor=bad').status_code, 400)
+            self.assertEqual(self.api('/services', self.restricted).status_code, 403)
+
+            lookup = '/services:lookup'
+            legacy_view = self.api(lookup + '?client_email=LEGACY-SERVICE').json
+            self.assertIsNone(legacy_view['customer_id'])
+            self.assertEqual(legacy_view['reseller_id'], self.admin_id)
+            self.assertEqual(legacy_view['client_email'], '••••')
+            self.assertTrue(legacy_view['flags']['nosms'])
+            self.assertEqual(self.api('/services/' + old_key).json['service_key'], legacy_view['service_key'])
+            digest = security.phone_lookup_hash('09121234567', pepper)
+            result = self.api(lookup, query_string={'phone_hash': digest})
+            self.assertEqual({row['service_key'] for row in result.json['items']}, set(expected))
+            self.assertNotIn('09121234567', result.get_data(as_text=True))
+            self.assertNotIn(legacy_uuid, result.get_data(as_text=True))
+            other = security.phone_lookup_hash('09121234568', pepper)
+            self.assertEqual(self.api(lookup, query_string={'phone_hash': other}).json['items'], [])
+            self.assertEqual(self.api(lookup, query_string={'phone_hash': digest, 'client_email': 'legacy-service'}).status_code, 400)
+            with patch.dict(os.environ, EVE_MACHINE_PHONE_PEPPER=secrets.token_hex(32)):
+                self.assertEqual(self.api(lookup, query_string={'phone_hash': digest}).json['items'], [])
+
+            with app.app_context():
+                revisions = {row.client_uuid: row.updated_at for row in MachineServiceIndex.query.all()}
+                rebuild_service_index(pepper)
+                self.assertEqual({row.client_uuid: row.updated_at for row in MachineServiceIndex.query.all()}, revisions)
+                owner = ServiceOwnership.query.filter_by(client_uuid=self.identity).one()
+                owner.revoked_at = security.utcnow()
+                db.session.commit()
+            self.assertIsNone(self.api('/services/' + self.service_key).json['customer_id'])
+
+        with patch.dict(GLOBAL_SERVER_DATA, inbounds=[], servers_status=[], _snapshot_complete=False):
+            with app.app_context():
+                rebuild_service_index(pepper)
+            retained = self.api(lookup, query_string={'phone_hash': digest}).json['items']
+            self.assertEqual({row['service_key'] for row in retained}, set(expected))
+
+    def test_index_exposes_legacy_service_without_snapshot_and_replaces_contact(self):
+        with app.app_context():
+            legacy = ClientOwnership(reseller_id=self.admin_id, server_id=self.server_id,
+                                     client_email='acct_09121234567')
+            db.session.add(legacy)
+            db.session.commit()
+            pepper = security.configured_secret('EVE_MACHINE_PHONE_PEPPER')
+            rebuild_service_index(pepper)
+            key = security.public_service_key(self.server_id, legacy_identity(legacy.id))
+        lookup = '/services:lookup'
+        before = security.phone_lookup_hash('09121234567', pepper)
+        after = security.phone_lookup_hash('09121234568', pepper)
+        self.assertEqual(self.api(lookup, query_string={'phone_hash': before}).json['items'][0]['service_key'], key)
+        with app.app_context():
+            legacy = ClientOwnership.query.one()
+            legacy.client_email = 'acct_09121234568'
+            db.session.commit()
+            rebuild_service_index(pepper)
+        self.assertEqual(self.api(lookup, query_string={'phone_hash': before}).json['items'], [])
+        self.assertEqual(self.api(lookup, query_string={'phone_hash': after}).json['items'][0]['service_key'], key)
+
     def test_migration_upgrades_an_existing_sqlite_schema(self):
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
         scripts = ScriptDirectory.from_config(Config(str(FIXTURE.parents[2] / 'alembic.ini')))
         migration = scripts.get_revision('45170a8ab431').module
-        new_tables = {'machine_api_keys', 'machine_events', 'machine_phone_lookups', 'machine_proposals'}
+        inventory_migration = scripts.get_revision('26713b0b96e2').module
+        new_tables = {'machine_api_keys', 'machine_events', 'machine_phone_lookups', 'machine_proposals',
+                      'machine_service_index'}
         engine = create_engine('sqlite://')
         with engine.begin() as connection:
             db.metadata.create_all(connection, tables=[table for table in db.metadata.sorted_tables
@@ -306,7 +469,11 @@ class MachineIntegrationTests(unittest.TestCase):
             with Operations.context(MigrationContext.configure(connection)):
                 migration.upgrade()
                 migration.upgrade()
+                inventory_migration.upgrade()
+                inventory_migration.upgrade()
             self.assertLessEqual(new_tables, set(inspect(connection).get_table_names()))
             self.assertIn('ix_machine_customers_cursor',
                           {index['name'] for index in inspect(connection).get_indexes('customer_accounts')})
+            self.assertIn('ix_machine_service_index_phone_hash',
+                          {index['name'] for index in inspect(connection).get_indexes('machine_service_index')})
         engine.dispose()

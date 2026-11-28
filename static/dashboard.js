@@ -4955,9 +4955,15 @@
         const fresh = hasCache && Date.now() - entry.fetchedAt < PACKAGE_CACHE_TTL_MS;
         if (hasCache) paint(entry.items, !fresh || force);
         if (fresh && !force) return entry.items;
+        let loadingTimer;
         if (!hasCache && isCurrent()) {
             container.title = '';
-            container.innerHTML = '<div style="grid-column: span 2; text-align: center; padding: 10px;">' + _t('Loading packages...') + '</div>';
+            container.replaceChildren();
+            loadingTimer = setTimeout(() => {
+                if (isCurrent() && !container.hasChildNodes()) {
+                    container.textContent = _t('Loading packages...');
+                }
+            }, 300);
         }
         if (!entry.inflight) {
             entry.inflight = (async () => {
@@ -4988,6 +4994,8 @@
             container.innerHTML = '<div style="grid-column: span 2; color: var(--danger); text-align: center;">' + _t('Error loading packages') + '</div>';
             clearSelection();
             return null;
+        } finally {
+            clearTimeout(loadingTimer);
         }
     }
 

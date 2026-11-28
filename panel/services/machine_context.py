@@ -3,17 +3,18 @@ import hmac
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_, tuple_
 
 from panel.core.redis_client import GLOBAL_SERVER_DATA
 from panel.core.snapshot_model import client_key
 from panel.extensions import db
-from panel.models import (FAQ, ClientOperation, NotificationTemplate, OnlineChatScript,
+from panel.models import (FAQ, ClientOperation, NotificationTemplate, OnlineChatScript, Server,
                           OwnershipClaim, OwnershipClaimItem, Package, RenewalEvent, RenewTemplate,
                           ServiceLifecycleState, ServiceOwnership, SmsSendLog, TelegramIdentity, Transaction)
 from panel.models.support import SupportChat, SupportChatMessage
 from panel.models.telegram import CustomerTransaction, TelegramServiceRequest
 from panel.services.lifecycle import make_service_key, resolve_client_uuid
+from panel.services.machine_inventory import service_inventory, snapshot_identity
 from panel.services.machine_security import (configured_secret, private_service_identity, public_operation_id,
                                              public_service_key, timestamp, utcnow)
 
@@ -35,13 +36,12 @@ def card_hash(value):
     return hmac.digest(secret, digits.encode('ascii'), 'sha256').hex() if secret and len(digits) == 16 else None
 
 
-def customer_views(rows):
-    identities = (TelegramIdentity.query.filter(TelegramIdentity.customer_id.in_([row.id for row in rows]))
-                  .order_by(TelegramIdentity.id).all()) if rows else []
-    telegram = {row.customer_id: '••••' for row in identities}
-    return [{'customer_id': row.id, 'display_name': masked_name(row.display_name),
+def customer_views(rows, *, include_name=False):
+    telegram = set(db.session.scalars(db.select(TelegramIdentity.customer_id).where(
+        TelegramIdentity.customer_id.in_([row.id for row in rows])).distinct())) if rows else set()
+    return [{'customer_id': row.id, 'display_name': row.display_name if include_name else masked_name(row.display_name),
              'primary_phone_masked': masked_digits(row.primary_phone),
-             'telegram_masked': telegram.get(row.id), 'status': row.status} for row in rows]
+             'telegram_masked': '••••' if row.id in telegram else None, 'status': row.status} for row in rows]
 
 
 def active_services():
@@ -52,7 +52,20 @@ def find_service(key):
     identity = private_service_identity(key)
     if identity is None:
         return None
-    return active_services().filter_by(server_id=identity[0], client_uuid=identity[1]).first()
+    inventory = service_inventory()
+    filters = [inventory.c.server_id == identity[0]]
+    if identity[1].startswith('~legacy:') and identity[1][8:].isdigit():
+        filters.append(or_(inventory.c.client_uuid == identity[1],
+                           inventory.c.legacy_id == int(identity[1][8:])))
+    else:
+        filters.append(inventory.c.client_uuid == identity[1])
+    return db.session.execute(db.select(inventory).where(*filters)).first()
+
+
+def ownership_started(owner):
+    if isinstance(owner, ServiceOwnership):
+        return owner.verified_at or owner.created_at
+    return owner.owned_since
 
 
 def snapshot_clients(owners):
@@ -77,7 +90,7 @@ def snapshot_clients(owners):
         if sid not in server_ids:
             continue
         for client in inbound.get('clients') or []:
-            uuid = resolve_client_uuid(client.get('raw_client')) or resolve_client_uuid(client)
+            uuid = snapshot_identity(client, str(inbound.get('id')))
             if (sid, uuid) in missing:
                 snapshot[(sid, uuid)] = client
                 missing.remove((sid, uuid))
@@ -89,7 +102,6 @@ def snapshot_clients(owners):
 def service_views(owners):
     if not owners:
         return []
-    from sqlalchemy.orm import joinedload
     keys = {(r.server_id, r.client_uuid) for r in owners}
     snapshot = snapshot_clients(owners)
     key_strings = [make_service_key(*key) for key in keys]
@@ -97,23 +109,24 @@ def service_views(owners):
         ServiceLifecycleState.service_key.in_(key_strings)).all()}
     verified_at = func.coalesce(RenewalEvent.verified_at, RenewalEvent.renewed_at)
     latest_renewals = (db.select(
-                        ServiceOwnership.id.label('owner_id'), verified_at.label('verified_at'),
+                        RenewalEvent.server_id, RenewalEvent.client_uuid, verified_at.label('verified_at'),
                         ClientOperation.pricing_quote.label('quote'),
-                        func.row_number().over(partition_by=ServiceOwnership.id,
+                        func.row_number().over(partition_by=(RenewalEvent.server_id, RenewalEvent.client_uuid),
                                                order_by=(verified_at.desc(), RenewalEvent.id.desc())).label('rank'))
             .select_from(RenewalEvent)
-            .join(ServiceOwnership, and_(ServiceOwnership.server_id == RenewalEvent.server_id,
-                                         ServiceOwnership.client_uuid == RenewalEvent.client_uuid))
+            .outerjoin(ServiceOwnership, and_(ServiceOwnership.server_id == RenewalEvent.server_id,
+                                              ServiceOwnership.client_uuid == RenewalEvent.client_uuid,
+                                              ServiceOwnership.revoked_at.is_(None)))
             .outerjoin(ClientOperation, and_(ClientOperation.idempotency_key == RenewalEvent.operation_id,
                                             ClientOperation.state == 'completed'))
-            .where(ServiceOwnership.id.in_([row.id for row in owners]), RenewalEvent.verified.is_(True),
-                    RenewalEvent.renewed_at >= func.coalesce(ServiceOwnership.verified_at, ServiceOwnership.created_at))
+            .where(tuple_(RenewalEvent.server_id, RenewalEvent.client_uuid).in_(keys), RenewalEvent.verified.is_(True),
+                   or_(ServiceOwnership.id.is_(None), RenewalEvent.renewed_at >= func.coalesce(
+                       ServiceOwnership.verified_at, ServiceOwnership.created_at)))
             .subquery())
-    verified = {row.owner_id: row for row in db.session.execute(
+    verified = {(row.server_id, row.client_uuid): row for row in db.session.execute(
         db.select(latest_renewals).where(latest_renewals.c.rank == 1))}
-    servers = {row.id: row.server.name for row in active_services().filter(
-        ServiceOwnership.id.in_([row.id for row in owners])).options(joinedload(ServiceOwnership.server)).all()
-               if row.server}
+    servers = dict(db.session.execute(db.select(Server.id, Server.name).where(
+        Server.id.in_({sid for sid, _ in keys}))).all())
     package_ids = {c.get('package_id') for c in snapshot.values() if type(c.get('package_id')) is int}
     packages = {p.id: p.name for p in Package.query.filter(Package.id.in_(package_ids)).all()} if package_ids else {}
     result = []
@@ -133,7 +146,7 @@ def service_views(owners):
         numeric_total = total if type(total) in (int, float) else None
         comment = str(data.get('comment', raw.get('comment')) or '')
         package_id = data.get('package_id')
-        last_renewal = verified.get(owner.id)
+        last_renewal = verified.get((sid, uuid))
         quote = last_renewal.quote if last_renewal and isinstance(last_renewal.quote, dict) else {}
         package = None
         if type(package_id) is int and package_id in packages:
@@ -143,8 +156,8 @@ def service_views(owners):
         status = data.get('service_state') or 'unknown'
         result.append({
             'service_key': public_service_key(sid, uuid), 'customer_id': owner.customer_id,
-            'client_email': masked_name(owner.client_email_snapshot),
-            'server_label': servers.get(owner.id), 'status': status,
+            'client_email': masked_name(owner.client_email_snapshot or getattr(owner, 'email_hash', None)),
+            'server_label': servers.get(sid), 'status': status,
             'expires_at': timestamp(expiration),
             'days_left': max(0, (expiration - utcnow()).total_seconds() / 86400) if expiration else None,
             'quota': {'total_gb': numeric_total / GIB if numeric_total is not None else None,
@@ -162,8 +175,9 @@ def service_views(owners):
 
 
 def renewal_rows(owner):
-    return RenewalEvent.query.filter_by(server_id=owner.server_id, client_uuid=owner.client_uuid, verified=True).filter(
-        RenewalEvent.renewed_at >= (owner.verified_at or owner.created_at))
+    rows = RenewalEvent.query.filter_by(server_id=owner.server_id, client_uuid=owner.client_uuid, verified=True)
+    since = ownership_started(owner)
+    return rows.filter(RenewalEvent.renewed_at >= since) if since else rows
 
 
 def renewal_view(row):
@@ -261,7 +275,9 @@ def knowledge_view():
 
 def notification_views(owner):
     key = make_service_key(owner.server_id, owner.client_uuid)
+    rows = SmsSendLog.query.filter_by(service_key=key)
+    if since := ownership_started(owner):
+        rows = rows.filter(SmsSendLog.created_at >= since)
     return [{'notification_id': row.id, 'status': row.status, 'state': row.state,
              'recipient_masked': masked_digits(row.recipient), 'created_at': timestamp(row.created_at)}
-            for row in SmsSendLog.query.filter_by(service_key=key).filter(
-                SmsSendLog.created_at >= (owner.verified_at or owner.created_at)).order_by(SmsSendLog.id.desc()).limit(20)]
+            for row in rows.order_by(SmsSendLog.id.desc()).limit(20)]

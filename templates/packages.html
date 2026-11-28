@@ -1445,8 +1445,9 @@ function escHtml(str) {
 
 /* ─── Init ─────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', async () => {
-    await loadResellerList();
     loadPackages();
+    await loadResellerList();
+    if (_pkgCache.length) renderPackages(document.getElementById('pkg-list-body'));
 });
 </script>
 {% endblock %}

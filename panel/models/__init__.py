@@ -5,7 +5,7 @@ from panel.models.support import (
     SupportActivity, SupportBudget, SupportChat, SupportChatMessage, SupportContract,
     SupportOperator, SupportPayroll, SupportRole,
 )
-from panel.models.machine import MachineAPIKey, MachineEvent, MachinePhoneLookup, MachineProposal
+from panel.models.machine import MachineAPIKey, MachineEvent, MachinePhoneLookup, MachineProposal, MachineServiceIndex
 from panel.models.core import (
     Admin,
     Server,

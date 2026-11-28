@@ -2802,9 +2802,9 @@ def ensure_background_threads_started():
     _start_worker('scheduler', run_scheduler, singleton=True)
     from panel.services.client_mutation_queue import client_mutation_worker
     _start_worker('client_mutation_queue', client_mutation_worker, singleton=True)
-    from panel.services.machine_events import machine_worker, webhook_config
+    from panel.services.machine_events import machine_worker
     from panel.services.machine_security import configured_secret
-    if configured_secret('EVE_MACHINE_PHONE_PEPPER') or webhook_config():
+    if configured_secret('EVE_MACHINE_PHONE_PEPPER') or configured_secret('EVE_MACHINE_SERVICE_KEY_SECRET'):
         _start_worker('machine_integration', machine_worker, singleton=True)
 
     # Data fetching:

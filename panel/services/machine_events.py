@@ -187,6 +187,7 @@ def record_opt_out(server_id, uuid, before, after):
 
 
 def deliver_due(http, url, secret, count=50, clock=time.time):
+    ca_file = (os.environ.get('EVE_GOD_AI_CA_FILE') or '').strip()
     for _ in range(count):
         row = (MachineEvent.query.filter(MachineEvent.delivered_at.is_(None), MachineEvent.next_attempt_at <= utcnow())
                .order_by(MachineEvent.next_attempt_at, MachineEvent.id).first())
@@ -201,10 +202,12 @@ def deliver_due(http, url, secret, count=50, clock=time.time):
             with http.post(url, data=body, headers={
                 'Content-Type': 'application/json', 'X-Eve-Delivery-Id': delivery_id,
                 'X-Eve-Timestamp': unix_seconds, 'X-Eve-Signature': signature(secret, unix_seconds, delivery_id, body),
-            }, timeout=(3, 8), allow_redirects=False, stream=True) as response:
+            }, timeout=(3, 8), allow_redirects=False, stream=True, verify=ca_file or True) as response:
                 delivered = 200 <= response.status_code < 300
         except requests.RequestException:
             pass
+        except OSError:
+            logger.warning('GOD AI webhook CA file is unavailable')
         row = db.session.get(MachineEvent, delivery_id)
         row.attempts += 1
         if delivered:
@@ -216,6 +219,8 @@ def deliver_due(http, url, secret, count=50, clock=time.time):
 
 def machine_worker():
     from app import app
+    from panel.core.redis_client import load_snapshot_from_redis
+    from panel.services.machine_inventory import rebuild_service_index
 
     cursor = 0
     current_pepper = None
@@ -227,6 +232,9 @@ def machine_worker():
                 with app.app_context(), resource_lock('machine-integration') as owner:
                     if owner:
                         pepper = configured_secret('EVE_MACHINE_PHONE_PEPPER')
+                        if configured_secret('EVE_MACHINE_SERVICE_KEY_SECRET'):
+                            load_snapshot_from_redis()
+                            rebuild_service_index(pepper)
                         if pepper != current_pepper:
                             cursor, current_pepper, backfill_complete = 0, pepper, False
                         if pepper and not backfill_complete:
